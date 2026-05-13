@@ -296,6 +296,25 @@ label.lbl { display: block; font-size: 10px; font-weight: 600; letter-spacing: 1
 .admin-list-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; background:var(--s1); border:1px solid var(--border); border-radius:8px; margin-bottom:6px; }
 .admin-list-row.on { border-color: var(--accent); background: var(--accentfade); }
 
+
+/* ── COURT MAP ── */
+.court-map-grid { display: grid; grid-template-columns: repeat(6, minmax(42px, 1fr)); gap: 8px; margin-top: 10px; }
+.court-map-seat { border: 1px solid var(--border); background: var(--s1); border-radius: 10px; min-height: 50px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: help; position: relative; transition: all .15s; }
+.court-map-seat:hover { transform: translateY(-1px); border-color: var(--accent); }
+.court-map-seat .cm-num { font-family: var(--display); font-size: 18px; letter-spacing: 1px; line-height: 1; }
+.court-map-seat .cm-state { font-size: 8px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-top: 4px; }
+.court-map-seat.free { border-style: dashed; opacity: .75; }
+.court-map-seat.used { background: rgba(255,190,0,.08); border-color: rgba(255,190,0,.45); }
+.court-map-seat.used .cm-state { color: var(--gold); }
+.court-map-seat.current { background: rgba(0,229,160,.10); border-color: rgba(0,229,160,.55); }
+.court-map-seat.current .cm-state { color: var(--accent); }
+.court-map-legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; font-size:10px; color:var(--muted); }
+.court-map-dot { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:5px; vertical-align:-1px; border:1px solid var(--border2); }
+.court-map-dot.free { background:var(--s1); }
+.court-map-dot.used { background:rgba(255,190,0,.45); }
+.court-map-dot.current { background:rgba(0,229,160,.65); }
+@media(max-width:580px){ .court-map-grid{grid-template-columns:repeat(4,1fr)} }
+
 </style>
 
 </head>
@@ -360,6 +379,54 @@ function selectTournament(id) {
 function selectedTournamentRecord() {
   const id = STATE.selectedTournamentId;
   return id ? STATE.tournaments?.[id] : null;
+}
+function courtUsageMap() {
+  const usage = {};
+  const selectedId = String(STATE.selectedTournamentId || "");
+  Object.entries(STATE.tournaments || {}).forEach(([id, rec]) => {
+    if (!rec || (rec.status || "ativo") !== "ativo" || !rec.tournament) return;
+    getCourts(rec.tournament).forEach(c => {
+      const label = courtLabel(c);
+      if (!usage[label]) usage[label] = [];
+      usage[label].push({
+        tournamentId: id,
+        title: rec.title || rec.tournament.title || "Torneio",
+        isCurrent: String(id) === selectedId,
+        liveId: c.liveId || null,
+        nextId: c.nextId || null
+      });
+    });
+  });
+  return usage;
+}
+
+function renderCourtUsageMap(currentTournament) {
+  const usage = courtUsageMap();
+  const configured = new Set(getCourts(currentTournament).map(c => courtLabel(c)));
+  const card = div("card");
+  card.appendChild(renderCardHead("Mapa de uso das quadras"));
+  card.appendChild(el("p", { style:{ fontSize:"11px", color:"var(--muted)", marginBottom:"8px" } }, "Visão global das 12 quadras. Passe o mouse sobre uma quadra ocupada para ver o torneio associado. A visualização é informativa e não bloqueia a configuração."));
+  const grid = div("court-map-grid");
+  for (let i = 1; i <= 12; i++) {
+    const label = String(i);
+    const rows = usage[label] || [];
+    const hasCurrent = configured.has(label);
+    const hasOther = rows.some(r => !r.isCurrent);
+    const cls = "court-map-seat " + (hasCurrent ? "current" : hasOther ? "used" : "free");
+    const titles = rows.length ? rows.map(r => `${r.isCurrent ? "Torneio atual" : "Torneio"}: ${safeText(r.title)}${r.liveId ? " · em quadra" : ""}${r.nextId ? " · próximo" : ""}`).join("\n") : "Quadra livre";
+    const state = hasCurrent ? "neste torneio" : hasOther ? "em uso" : "livre";
+    const cell = el("div", { class: cls, title: titles });
+    cell.appendChild(el("div", { class:"cm-num" }, `Q${label}`));
+    cell.appendChild(el("div", { class:"cm-state" }, state));
+    grid.appendChild(cell);
+  }
+  card.appendChild(grid);
+  const legend = div("court-map-legend");
+  legend.appendChild(el("span", {}, el("span", {class:"court-map-dot free"}), "Livre"));
+  legend.appendChild(el("span", {}, el("span", {class:"court-map-dot used"}), "Usada por outro torneio ativo"));
+  legend.appendChild(el("span", {}, el("span", {class:"court-map-dot current"}), "Configurada neste torneio"));
+  card.appendChild(legend);
+  return card;
 }
 async function saveMultiStore() {
   await dbSave({ tournaments: STATE.tournaments || {}, updatedAt: Date.now() });
@@ -849,7 +916,7 @@ function buildTournament(p) {
 //  STATE
 // ══════════════════════════════════════════════════════════
 const ADMIN_PIN = "0210"; // Change this before deploying!
-const REF_PIN = "0519"; // PIN da arbitragem
+const REF_PIN = "1234"; // PIN da arbitragem
 let STATE = {
   view: "public",    // "public" | "admin" | "ref"
   adminUnlocked: false,
@@ -1465,6 +1532,8 @@ function renderCourtPanel(t) {
   const games = getAllGames(t);
   const courts = getCourts(t);
   const selected = selectedGamesByCourt(games, t);
+
+  wrap.appendChild(renderCourtUsageMap(t));
 
   const cfg = div("card");
   cfg.appendChild(renderCardHead("Configuração das Quadras"));
