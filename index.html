@@ -1198,7 +1198,7 @@ function parseText(txt) {
 
 function buildTournament(p) {
   const rules = {...defaultRulesForSport(p.sport || p.rules?.sport || "futebol"), ...(p.rules||{}), format:p.fmt, teamCount:(p.allT?.length||Object.values(p.groups||{}).flat().length||0), groupCount:Object.keys(p.groups||{}).length||Number(p.groupCount)||0, qualifiersPerGroup:Number(p.qpg)||2, bracketRules:{ enabled:true, bracketSize:"auto", byeStrategy:"topSeeds", seedingSource:"overall", avoidSameGroupFirstRound:true, avoidSameGroupUntil:"semifinal", ...((p.rules||{}).bracketRules||{}) }};
-  const base={title:p.title,fmt:p.fmt,rules,liveId:null,nextId:null,courts:[{id:"1",label:"1",n:1,liveId:null,nextId:null}],awards:[],votes:{},votingOpen:false,createdAt:Date.now()};
+  const base={title:p.title,description:p.description||"",fmt:p.fmt,rules,liveId:null,nextId:null,courts:[{id:"1",label:"1",n:1,liveId:null,nextId:null}],awards:[],votes:{},votingOpen:false,createdAt:Date.now()};
   if(p.fmt==="sg") return{...base,teams:p.allT,games:roundRobin(p.allT),finals:null};
   if(p.fmt==="mg"){
     const sourceGroups = {...(p.groups||{})};
@@ -1219,6 +1219,69 @@ function buildTournament(p) {
     return{...base,teams:t,swR:p.swR,round:1,allG:[],curG:swissPair(t,[],calcStats(t,[],base.rules))};
   }
   return base;
+}
+
+
+function qualifiedSeedsForTournament(t) {
+  if (!t || t.fmt !== "mg" || !t.groups) return [];
+  const gkeys = Object.keys(t.groups || {});
+  const q = Number(t.qpg || t.rules?.qualifiersPerGroup || 2);
+  const rows = [];
+  gkeys.forEach(k => {
+    const ranking = calcStats(t.groups[k].teams || [], t.groups[k].games || [], t.rules);
+    ranking.slice(0, q).forEach(r => rows.push({ ...r, group:k }));
+  });
+  return rows.sort((a,b)=>{
+    const setSport = isSetSport(t.rules);
+    return setSport
+      ? (b.w-a.w || b.setDiff-a.setDiff || b.diff-a.diff || b.gf-a.gf || String(a.team).localeCompare(String(b.team)))
+      : (b.pts-a.pts || b.w-a.w || b.diff-a.diff || b.gf-a.gf || String(a.team).localeCompare(String(b.team)));
+  }).map((r,i)=>({ team:r.team, group:r.group, seed:i+1 }));
+}
+
+function eliminationHasResults(brk) {
+  return (brk || []).some(r => (r.games || []).some(g => hasScorePair(g.sA, g.sB) || (Array.isArray(g.sets) && g.sets.length)));
+}
+
+function rebuildDerivedElimination(t, reason) {
+  if (!t || t.fmt !== "mg" || !t.brk) return t;
+  const seeds = qualifiedSeedsForTournament(t);
+  if (!seeds.length) return t;
+  const hadResults = eliminationHasResults(t.brk);
+  return {
+    ...t,
+    brk: buildBracket(seeds, t.rules?.bracketRules || {}),
+    bracketUpdatedAt: Date.now(),
+    bracketUpdatedReason: reason || "Classificação recalculada",
+    bracketHadResultsBeforeRebuild: hadResults
+  };
+}
+
+function persistTournamentWithDerived(t, reason) {
+  persistTournament(rebuildDerivedElimination(t, reason));
+}
+
+function deriveSetPatchFromInputs(g, t, setPairs) {
+  const sets = [];
+  for (let i = 0; i < setPairs.length; i++) {
+    const a = toScoreOrNull(setPairs[i].a);
+    const b = toScoreOrNull(setPairs[i].b);
+    if (a === null && b === null) continue;
+    if (a === null || b === null) continue;
+    sets.push({ n:i+1, a, b, closedAt:g?.sets?.[i]?.closedAt || Date.now() });
+  }
+  let aSets = 0, bSets = 0;
+  sets.forEach(st => { if (Number(st.a) > Number(st.b)) aSets++; else if (Number(st.b) > Number(st.a)) bSets++; });
+  const setsToWin = Number(t?.rules?.setsToWin || 2);
+  const finished = aSets >= setsToWin || bSets >= setsToWin;
+  return {
+    sets,
+    currentSet: finished ? Math.max(1, sets.length) : Math.min(maxSetsForTournament(t), sets.length + 1),
+    sA: null,
+    sB: null,
+    status: finished ? "finished" : "pending",
+    finishedAt: finished ? (g?.finishedAt || Date.now()) : null
+  };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1381,7 +1444,8 @@ function toScoreOrNull(v) {
 }
 
 function scorePatch(field, val) {
-  if (field === "__score" && val && typeof val === "object") {
+  if ((field === "__score" || field === "__patch") && val && typeof val === "object") {
+    if (field === "__patch") return { ...val };
     return {
       sA: toScoreOrNull(val.sA),
       sB: toScoreOrNull(val.sB)
@@ -1465,7 +1529,7 @@ function render() {
 function renderTopbar() {
   const tb = div("topbar");
   const logo = el("div",{"class":"logo"});
-  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios · V6</small></div>`;
+  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios · V8</small></div>`;
   const right = div("topbar-right");
 
   if (STATE.lastUpdated) {
@@ -1571,6 +1635,7 @@ function renderPublic() {
   // Title
   wrap.appendChild(el("div",{"class":"page-title"},t.title));
   wrap.appendChild(el("div",{"class":"page-sub"},{sg:"Grupo Único",mg:"Múltiplos Grupos",se:"Mata-Mata",sw:"Sistema Suíço"}[t.fmt]||""));
+  wrap.appendChild(renderTournamentInfoCard(t, false));
 
   if(STATE.lastUpdated){
     const n = div("notice notice-ok");
@@ -1590,6 +1655,90 @@ function renderPublic() {
   return wrap;
 }
 
+
+
+// ══════════════════════════════════════════════════════════
+//  TOURNAMENT INFO / TECHNICAL SHEET
+// ══════════════════════════════════════════════════════════
+function getTournamentTeamCount(t) {
+  if (!t) return 0;
+  if (Array.isArray(t.teams)) return t.teams.length;
+  if (t.groups) return Object.values(t.groups).reduce((acc, g) => acc + ((g.teams||[]).length), 0);
+  return Number(t.rules?.teamCount || 0) || 0;
+}
+
+function getTournamentGroupCount(t) {
+  if (!t) return 0;
+  if (t.groups) return Object.keys(t.groups).length;
+  return Number(t.rules?.groupCount || 0) || 0;
+}
+
+function getSetSummary(t) {
+  const r = t?.rules || {};
+  if (!isSetSport(r)) return null;
+  const maxSets = Math.max(1, Number(r.setsToWin || 2) * 2 - 1);
+  return `Melhor de ${maxSets} (${safeText(r.setsToWin)} set${Number(r.setsToWin||0)===1?"":"s"} para vencer)`;
+}
+
+function getTieBreakSummary(t) {
+  const r = t?.rules || {};
+  if (!isSetSport(r)) return null;
+  return `Set regular até ${safeText(r.pointsPerSet)} pontos com 2 de vantagem; tie-break até ${safeText(r.tieBreakPoints || 15)} com 2 de vantagem.`;
+}
+
+function renderInfoGrid(rows) {
+  const grid = el("div", {style:{display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:"8px", marginTop:"10px"}});
+  rows.forEach(([label, value]) => {
+    if (value === null || value === undefined || value === "") return;
+    const item = el("div", {style:{background:"var(--s1)", border:"1px solid var(--border)", borderRadius:"7px", padding:"9px 10px"}});
+    item.appendChild(el("div", {style:{fontSize:"9px", fontWeight:"700", letterSpacing:"1.5px", textTransform:"uppercase", color:"var(--muted)", marginBottom:"3px"}}, label));
+    item.appendChild(el("div", {style:{fontSize:"13px", fontWeight:"700", color:"var(--text)"}}, safeText(value)));
+    grid.appendChild(item);
+  });
+  return grid;
+}
+
+function renderCriteriaList(rules) {
+  const list = el("ol", {style:{margin:"8px 0 0 20px", fontSize:"12px", color:"var(--text)", lineHeight:"1.7"}});
+  criteriaLabels(rules).forEach(label => list.appendChild(el("li", {}, label)));
+  return list;
+}
+
+function renderTournamentInfoCard(t, adminMode) {
+  const r = t?.rules || {};
+  const card = div("card");
+  card.appendChild(renderCardHead(adminMode ? "Ficha Técnica do Torneio" : "Informações do Torneio"));
+
+  const rows = [
+    ["Nome", t?.title],
+    ["Modalidade", sportLabel(r.sport)],
+    ["Formato", formatLabel(t?.fmt || r.format)],
+    ["Número de equipes", getTournamentTeamCount(t)],
+    ["Número de grupos", getTournamentGroupCount(t) || "-"],
+    ["Classificados por grupo", (t?.fmt === "mg" || t?.fmt === "mgk") ? safeText(t?.qpg || r.qualifiersPerGroup) : "-"],
+    ["Regra de sets", getSetSummary(t)],
+    ["Pontos por set", isSetSport(r) ? safeText(r.pointsPerSet) : null],
+    ["Tie-break", isSetSport(r) ? safeText(r.tieBreakPoints || 15) : null],
+    ["Pontuação", !isSetSport(r) ? `Vitória ${safeText(r.winPoints ?? 3)} · Empate ${safeText(r.drawPoints ?? 1)} · Derrota ${safeText(r.lossPoints ?? 0)}` : null]
+  ];
+  card.appendChild(renderInfoGrid(rows));
+
+  const ruleText = getTieBreakSummary(t);
+  if (ruleText) card.appendChild(el("div", {class:"notice notice-info", style:{marginTop:"10px"}}, ruleText));
+
+  const crit = div("", el("div", {class:"section-lbl"}, "Critérios de classificação/desempate"));
+  crit.appendChild(renderCriteriaList(r));
+  card.appendChild(crit);
+
+  const extra = safeText(t?.description);
+  if (extra !== "-") {
+    const extraBox = el("div", {style:{marginTop:"12px", padding:"10px 12px", background:"var(--s1)", border:"1px solid var(--border)", borderRadius:"7px", whiteSpace:"pre-wrap", fontSize:"12px"}});
+    extraBox.appendChild(el("div", {style:{fontSize:"9px", fontWeight:"700", letterSpacing:"1.5px", textTransform:"uppercase", color:"var(--muted)", marginBottom:"5px"}}, "Informações adicionais"));
+    extraBox.appendChild(document.createTextNode(extra));
+    card.appendChild(extraBox);
+  }
+  return card;
+}
 
 // ══════════════════════════════════════════════════════════
 //  REFEREE VIEW
@@ -1908,6 +2057,27 @@ function renderAdminManage(t) {
   hdr.appendChild(info);
   hdr.appendChild(btn("btn-danger btn-sm","🏁 Encerrar torneio",()=>{ if(confirm("Encerrar este torneio? Ele continuará disponível no filtro Encerrados.")){ persistTournament(null); } }));
   wrap.appendChild(hdr);
+
+  wrap.appendChild(renderTournamentInfoCard(t, true));
+
+  const notesCard = div("card");
+  notesCard.appendChild(renderCardHead("Informações adicionais"));
+  notesCard.appendChild(el("p", {style:{fontSize:"11px", color:"var(--muted)", marginBottom:"8px"}}, "Texto livre exibido também ao público: regulamento complementar, horários, endereço, premiação, observações do evento etc."));
+  const desc = el("textarea", {class:"textarea", style:{minHeight:"80px"}, placeholder:"Ex: Semifinal na quadra central. Aquecimento de 5 minutos. Premiação às 18h..."}, safeText(t.description)==="-"?"":String(t.description||""));
+  notesCard.appendChild(desc);
+  notesCard.appendChild(el("div", {style:{marginTop:"8px", display:"flex", gap:"8px", flexWrap:"wrap"}},
+    btn("btn-primary btn-sm", "Salvar informações", () => persistTournament({...t, description:desc.value.trim()})),
+    btn("btn-ghost btn-sm", "Limpar", () => { desc.value=""; persistTournament({...t, description:""}); })
+  ));
+  if (t.bracketUpdatedAt) {
+    notesCard.appendChild(el("div", {class:"notice notice-info", style:{marginTop:"10px"}}, `Chaveamento recalculado em ${new Date(t.bracketUpdatedAt).toLocaleTimeString("pt-BR")} · ${safeText(t.bracketUpdatedReason)}${t.bracketHadResultsBeforeRebuild?" · resultados anteriores da eliminatória foram reiniciados":""}`));
+  }
+  wrap.appendChild(notesCard);
+
+  const n = div("notice notice-info");
+  n.textContent = "No Gerenciar, o administrador pode corrigir placares e sets. Se a classificação mudar e já houver chave eliminatória gerada, a chave será recalculada automaticamente a partir dos novos classificados.";
+  wrap.appendChild(n);
+
   wrap.appendChild(renderTournament(t, false));
   return wrap;
 }
@@ -2376,7 +2546,7 @@ function renderMultiGroup(t, readOnly) {
     gc.appendChild(el("hr",{"class":"divider"}));
     gc.appendChild(renderGameList(t.groups[k].games,readOnly,t,(id,field,val)=>{
       const grp={...t.groups[k],games:t.groups[k].games.map(g=>g.id===id?{...g,...scorePatch(field,val)}:g)};
-      persistTournament({...t,groups:{...t.groups,[k]:grp}});
+      persistTournamentWithDerived({...t,groups:{...t.groups,[k]:grp}}, "Correção de placar na fase de grupos");
     },k));
     twoCol.appendChild(gc);
   });
@@ -2563,7 +2733,12 @@ function renderGameRow(g, readOnly, t, key, onScore) {
 
   row.appendChild(el("span",{"class":"g-team"+(aW?" winner":"")},safeText(g.a)));
 
-  if(readOnly){
+  if(isSetSportTournament(t)){
+    const st = getSetState(g, t);
+    row.appendChild(el("span",{"class":"g-score"+(st.aSets>st.bSets?" winner":"")},safeScore(st.aSets)));
+    row.appendChild(el("span",{"class":"g-vs"},"sets"));
+    row.appendChild(el("span",{"class":"g-score"+(st.bSets>st.aSets?" winner":"")},safeScore(st.bSets)));
+  } else if(readOnly){
     row.appendChild(el("span",{"class":"g-score"+(aW?" winner":"")},done?safeScore(g.sA):"-"));
     row.appendChild(el("span",{"class":"g-vs"},"×"));
     row.appendChild(el("span",{"class":"g-score"+(bW?" winner":"")},done?safeScore(g.sB):"-"));
@@ -2586,13 +2761,46 @@ function renderGameRow(g, readOnly, t, key, onScore) {
   else if(!readOnly&&done) row.appendChild(el("span",{"class":"g-ok"},"✓"));
 
   const partials = renderSetPartials(g, t);
-  if (partials) {
+  const editor = (!readOnly && isSetSportTournament(t)) ? renderAdminSetEditor(g, t, (patch)=>onScore(g.id, "__patch", patch)) : null;
+  if (partials || editor) {
     const box = div("");
     box.appendChild(row);
-    box.appendChild(partials);
+    if (partials) box.appendChild(partials);
+    if (editor) box.appendChild(editor);
     return box;
   }
   return row;
+}
+
+
+function renderAdminSetEditor(g, t, onPatch) {
+  if (!isSetSportTournament(t)) return null;
+  const card = el("div", {class:"set-partials", style:{margin:"6px 0 10px 30px", padding:"9px", border:"1px solid rgba(0,229,160,.25)", borderRadius:"8px", background:"rgba(0,229,160,.04)"}});
+  card.appendChild(el("div", {style:{fontSize:"10px", letterSpacing:"1.5px", textTransform:"uppercase", color:"var(--accent)", fontWeight:"700", marginBottom:"7px"}}, "Editar sets — Admin"));
+  const maxSets = maxSetsForTournament(t);
+  const grid = el("div", {style:{display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:"8px"}});
+  const inputs = [];
+  for (let i = 0; i < maxSets; i++) {
+    const existing = Array.isArray(g.sets) ? g.sets[i] : null;
+    const box = el("div", {style:{display:"flex", alignItems:"center", gap:"5px", background:"var(--s1)", border:"1px solid var(--border)", borderRadius:"7px", padding:"7px"}});
+    box.appendChild(el("span", {style:{fontSize:"10px", color:"var(--muted)", minWidth:"42px"}}, `${i+1}º set`));
+    const a = el("input", {class:"g-score-inp", type:"number", min:"0", value:safeInputValue(existing?.a)});
+    const b = el("input", {class:"g-score-inp", type:"number", min:"0", value:safeInputValue(existing?.b)});
+    inputs.push({a,b});
+    box.appendChild(a); box.appendChild(el("span", {class:"g-vs"}, "×")); box.appendChild(b);
+    grid.appendChild(box);
+  }
+  card.appendChild(grid);
+  const err = div("err");
+  card.appendChild(err);
+  card.appendChild(el("div", {style:{marginTop:"8px", display:"flex", gap:"8px", flexWrap:"wrap"}},
+    btn("btn-primary btn-sm", "Salvar sets", () => {
+      const patch = deriveSetPatchFromInputs(g, t, inputs.map(x => ({a:x.a.value, b:x.b.value})));
+      onPatch(patch);
+    }),
+    btn("btn-ghost btn-sm", "Limpar sets", () => onPatch({sets:[], currentSet:1, sA:null, sB:null, status:"pending", finishedAt:null}))
+  ));
+  return card;
 }
 
 function renderElimSlot(label, a, b, sA, sB, cls, readOnly, t, key, onScore) {
