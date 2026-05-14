@@ -619,19 +619,102 @@ function calcStats(teams, games, rules) {
 function pow2(n){let p=1;while(p<n)p*=2;return p;}
 function rndName(n){return n===1?"Final 🏆":n===2?"Semifinal":n===4?"Quartas de Final":n===8?"Oitavas":`Round de ${n*2}`;}
 
-function buildBracket(seeds) {
-  const sz = pow2(seeds.length);
-  const seeded = [];
-  for (let i=0;i<sz/2;i++) seeded.push(i,sz-1-i);
-  let cur = seeded.map(i=>seeds[i]||null);
-  const rounds=[]; let rn=1;
-  while(cur.length>1){
-    const games=[];
-    for(let i=0;i<cur.length;i+=2)
-      games.push({id:`R${rn}G${i/2+1}`,a:cur[i],b:cur[i+1],sA:null,sB:null});
-    rounds.push({rn,name:rndName(cur.length/2),games});
-    cur=games.map(()=>null);rn++;
+function seedOrder(size) {
+  if (size <= 1) return [1];
+  const prev = seedOrder(size / 2);
+  return prev.flatMap(s => [s, size + 1 - s]);
+}
+
+function normalizeSeedEntry(entry, idx) {
+  if (entry === null || entry === undefined) return null;
+  if (typeof entry === "object") return { team: entry.team || entry.name || String(entry), group: entry.group || entry.grp || null, seed: entry.seed || idx + 1 };
+  return { team: String(entry), group: null, seed: idx + 1 };
+}
+
+function seedTeam(seed) { return seed ? seed.team : null; }
+function seedGroup(seed) { return seed ? seed.group || null : null; }
+
+function setGameSide(game, side, seed) {
+  game[side] = seedTeam(seed);
+  game[side + "Seed"] = seed ? seed.seed : null;
+  game[side + "Group"] = seedGroup(seed);
+}
+
+function advanceSeed(rounds, fromRoundIndex, fromGameIndex, seed) {
+  const nextRound = rounds[fromRoundIndex + 1];
+  if (!nextRound || !seed) return;
+  const nextGameIndex = Math.floor(fromGameIndex / 2);
+  const side = fromGameIndex % 2 === 0 ? "a" : "b";
+  if (nextRound.games[nextGameIndex]) setGameSide(nextRound.games[nextGameIndex], side, seed);
+}
+
+function wouldRepeatGroup(game) {
+  return game && game.aGroup && game.bGroup && game.aGroup === game.bGroup;
+}
+
+function avoidSameGroupFirstRound(games) {
+  // Heurística simples: quando um jogo da primeira rodada repete grupo, tenta trocar
+  // o visitante com outro jogo sem criar nova repetição. Não bloqueia a chave se não houver alternativa.
+  for (let i = 0; i < games.length; i++) {
+    if (!wouldRepeatGroup(games[i])) continue;
+    for (let j = 0; j < games.length; j++) {
+      if (i === j) continue;
+      for (const side of ["a", "b"]) {
+        const gi = JSON.parse(JSON.stringify(games[i]));
+        const gj = JSON.parse(JSON.stringify(games[j]));
+        const otherSide = side;
+        const tmp = { team: gj[otherSide], group: gj[otherSide + "Group"], seed: gj[otherSide + "Seed"] };
+        if (!tmp.team) continue;
+        setGameSide(gj, otherSide, { team: gi.b, group: gi.bGroup, seed: gi.bSeed });
+        setGameSide(gi, "b", tmp);
+        if (!wouldRepeatGroup(gi) && !wouldRepeatGroup(gj)) {
+          games[i] = gi; games[j] = gj; return games;
+        }
+      }
+    }
   }
+  return games;
+}
+
+function buildBracket(seeds, options = {}) {
+  const normalized = (seeds || []).map(normalizeSeedEntry).filter(s => s && s.team);
+  const sz = pow2(normalized.length || 2);
+  const order = seedOrder(sz);
+  const slots = order.map(seedNum => normalized[seedNum - 1] || null);
+  const rounds = [];
+  let curLen = slots.length;
+  let rn = 1;
+  while (curLen > 1) {
+    const games = [];
+    for (let i = 0; i < curLen; i += 2) {
+      const g = { id:`R${rn}G${i/2+1}`, a:null, b:null, sA:null, sB:null };
+      if (rn === 1) {
+        setGameSide(g, "a", slots[i]);
+        setGameSide(g, "b", slots[i + 1]);
+        if (g.a && !g.b) g.byeWinner = g.a;
+        if (!g.a && g.b) g.byeWinner = g.b;
+      }
+      games.push(g);
+    }
+    rounds.push({ rn, name:rndName(curLen/2), games });
+    curLen = curLen / 2; rn++;
+  }
+
+  if (options.avoidSameGroupFirstRound !== false) {
+    rounds[0].games = avoidSameGroupFirstRound(rounds[0].games);
+  }
+
+  rounds[0].games.forEach((g, gi) => {
+    if (g.a && !g.b) advanceSeed(rounds, 0, gi, { team:g.a, group:g.aGroup, seed:g.aSeed });
+    if (!g.a && g.b) advanceSeed(rounds, 0, gi, { team:g.b, group:g.bGroup, seed:g.bSeed });
+  });
+
+  rounds.bracketMeta = {
+    bracketSize: sz,
+    byes: Math.max(0, sz - normalized.length),
+    byeStrategy: "topSeeds",
+    avoidSameGroupFirstRound: options.avoidSameGroupFirstRound !== false
+  };
   return rounds;
 }
 
@@ -1109,7 +1192,7 @@ function parseText(txt) {
 }
 
 function buildTournament(p) {
-  const rules = {...defaultRulesForSport(p.sport || p.rules?.sport || "futebol"), ...(p.rules||{}), format:p.fmt, teamCount:(p.allT?.length||Object.values(p.groups||{}).flat().length||0), groupCount:Object.keys(p.groups||{}).length||Number(p.groupCount)||0, qualifiersPerGroup:Number(p.qpg)||2};
+  const rules = {...defaultRulesForSport(p.sport || p.rules?.sport || "futebol"), ...(p.rules||{}), format:p.fmt, teamCount:(p.allT?.length||Object.values(p.groups||{}).flat().length||0), groupCount:Object.keys(p.groups||{}).length||Number(p.groupCount)||0, qualifiersPerGroup:Number(p.qpg)||2, bracketRules:{ enabled:true, bracketSize:"auto", byeStrategy:"topSeeds", seedingSource:"overall", avoidSameGroupFirstRound:true, avoidSameGroupUntil:"semifinal", ...((p.rules||{}).bracketRules||{}) }};
   const base={title:p.title,fmt:p.fmt,rules,liveId:null,nextId:null,courts:[{id:"1",label:"1",n:1,liveId:null,nextId:null}],awards:[],votes:{},votingOpen:false,createdAt:Date.now()};
   if(p.fmt==="sg") return{...base,teams:p.allT,games:roundRobin(p.allT),finals:null};
   if(p.fmt==="mg"){
@@ -1377,7 +1460,7 @@ function render() {
 function renderTopbar() {
   const tb = div("topbar");
   const logo = el("div",{"class":"logo"});
-  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios</small></div>`;
+  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios · V6</small></div>`;
   const right = div("topbar-right");
 
   if (STATE.lastUpdated) {
@@ -2298,11 +2381,19 @@ function renderMultiGroup(t, readOnly) {
     const ec = div("card");
     ec.appendChild(renderCardHead("Fase Eliminatória"));
     const q=t.qpg||2;
-    const qualified=gkeys.flatMap(k=>rankings[k].slice(0,q).map(r=>r.team));
+    const qualifiedRows=gkeys.flatMap(k=>rankings[k].slice(0,q).map(r=>({...r,group:k})));
+    const qualified=[...qualifiedRows].sort((a,b)=>{
+      const setSport = isSetSport(t.rules);
+      return setSport
+        ? (b.w-a.w || b.setDiff-a.setDiff || b.diff-a.diff || b.gf-a.gf || String(a.team).localeCompare(String(b.team)))
+        : (b.pts-a.pts || b.w-a.w || b.diff-a.diff || b.gf-a.gf || String(a.team).localeCompare(String(b.team)));
+    }).map((r,i)=>({team:r.team, group:r.group, seed:i+1}));
     if(!t.brk&&!readOnly&&allDone){
       const n = div("notice notice-info");
-      n.appendChild(document.createTextNode("Grupos concluídos! "));
-      n.appendChild(btn("btn-primary btn-sm","Gerar Chaveamento",()=>persistTournament({...t,brk:buildBracket(qualified)})));
+      const bracketSize = pow2(qualified.length || 2);
+      const byes = Math.max(0, bracketSize - qualified.length);
+      n.appendChild(document.createTextNode(`Grupos concluídos! ${qualified.length} classificados · chave de ${bracketSize}${byes?` · ${byes} bye(s) para os melhores seeds`:""}. `));
+      n.appendChild(btn("btn-primary btn-sm","Gerar Chaveamento",()=>persistTournament({...t,brk:buildBracket(qualified,t.rules?.bracketRules||{})})));
       ec.appendChild(n);
     }
     if(t.brk) ec.appendChild(renderBracket(t.brk,readOnly,t,(rounds)=>persistTournament({...t,brk:rounds})));
@@ -2535,11 +2626,18 @@ function renderBracket(rounds, readOnly, t, onUpdate) {
     wrap.appendChild(el("div",{"class":"brk-round-title"},rnd.name));
     rnd.games.forEach((g,gi)=>{
       const key=`${t.fmt==="se"?"se":"br"}-${rnd.rn}-${gi}`;
-      wrap.appendChild(renderElimSlot(`J${gi+1}`,g.a,g.b,g.sA,g.sB,rnd.name==="Final 🏆"?"elim-final":rnd.name==="Semifinal"?"elim-semi":"",readOnly,t,key,(field,val)=>{
+      const slot = renderElimSlot(`J${gi+1}`,g.a,g.b,g.sA,g.sB,rnd.name==="Final 🏆"?"elim-final":rnd.name==="Semifinal"?"elim-semi":"",readOnly,t,key,(field,val)=>{
         const r=JSON.parse(JSON.stringify(rounds));
         Object.assign(r[ri].games[gi], scorePatch(field,val));
         onUpdate(propagateBracket(r));
-      }));
+      });
+      if (g.byeWinner) {
+        slot.appendChild(el("div",{"style":{fontSize:"10px",color:"var(--blue)",marginTop:"5px"}},`Bye automático: ${g.byeWinner}`));
+      }
+      if (g.aGroup || g.bGroup) {
+        slot.appendChild(el("div",{"style":{fontSize:"9px",color:"var(--muted)",marginTop:"3px"}},`Seeds: ${safeText(g.aSeed)}${g.aGroup?`/${g.aGroup}`:""} × ${safeText(g.bSeed)}${g.bGroup?`/${g.bGroup}`:""}`));
+      }
+      wrap.appendChild(slot);
     });
   });
   return wrap;
