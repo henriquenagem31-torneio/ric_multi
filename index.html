@@ -505,12 +505,12 @@ function roundRobin(teams) {
 
 function defaultRulesForSport(sport) {
   const sp = sport || "futebol";
-  if (sp === "volei" || sp === "futevolei") {
+  if (sp === "volei" || sp === "voleipraia" || sp === "futevolei") {
     return {
       sport: sp,
       matchMode: "sets",
       setsToWin: 2,
-      pointsPerSet: sp === "futevolei" ? 18 : 25,
+      pointsPerSet: sp === "futevolei" ? 18 : (sp === "voleipraia" ? 21 : 25),
       tieBreakPoints: 15,
       standingsCriteria: ["wins","headToHead","setDiff","pointDiff","pointsFor"]
     };
@@ -559,7 +559,7 @@ function calcHeadToHeadScore(team, other, games, rules) {
 
 function calcStats(teams, games, rules) {
   const r = rules || defaultRulesForSport("futebol");
-  const setSportMode = isSetSport(r) || r.matchMode === "sets" || r.sport === "volei" || r.sport === "futevolei";
+  const setSportMode = isSetSport(r) || r.matchMode === "sets" || r.sport === "volei" || r.sport === "voleipraia" || r.sport === "futevolei";
   const s = {};
   teams.forEach(t => { s[t] = { w:0, d:0, l:0, pts:0, gf:0, ga:0, played:0, setsFor:0, setsAgainst:0 }; });
 
@@ -1000,12 +1000,12 @@ function renderTechnicalTimeoutPanel(t, key, g) {
 
 function isSetSport(r) {
   r = r || {};
-  return r.matchMode === "sets" || r.sport === "volei" || r.sport === "futevolei";
+  return r.matchMode === "sets" || r.sport === "volei" || r.sport === "voleipraia" || r.sport === "futevolei";
 }
 
 function isSetSportTournament(t) {
   const r = t?.rules || {};
-  return r.matchMode === "sets" || r.sport === "volei" || r.sport === "futevolei";
+  return r.matchMode === "sets" || r.sport === "volei" || r.sport === "voleipraia" || r.sport === "futevolei";
 }
 
 function maxSetsForTournament(t) {
@@ -1535,7 +1535,7 @@ function render() {
 function renderTopbar() {
   const tb = div("topbar");
   const logo = el("div",{"class":"logo"});
-  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios · V8.2.2</small></div>`;
+  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios · V8.3.3</small></div>`;
   const right = div("topbar-right");
 
   if (STATE.lastUpdated) {
@@ -1940,6 +1940,7 @@ function renderAdminCreate() {
   const sportGrid = div("wiz-grid");
   const sports = [
     {id:"volei", name:"Vôlei", desc:"Classificação por vitórias; suporte a sets."},
+    {id:"voleipraia", name:"Vôlei de Praia", desc:"Classificação por vitórias; pontos por set configuráveis."},
     {id:"futevolei", name:"Futevôlei", desc:"Classificação por vitórias; pontos por set configuráveis."},
     {id:"futebol", name:"Futebol", desc:"Pontos corridos: vitória/empate/derrota."},
     {id:"futsal", name:"Futsal", desc:"Mesma lógica de futebol, com gols pró/saldo."}
