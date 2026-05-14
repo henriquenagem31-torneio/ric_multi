@@ -526,7 +526,7 @@ function defaultRulesForSport(sport) {
 }
 
 function sportLabel(sport) {
-  return ({volei:"Vôlei",futevolei:"Futevôlei",futebol:"Futebol",futsal:"Futsal"})[sport] || "-";
+  return ({volei:"Vôlei",voleipraia:"Vôlei de Praia",futevolei:"Futevôlei",futebol:"Futebol",futsal:"Futsal"})[sport] || "-";
 }
 
 function formatLabel(fmt) {
@@ -559,48 +559,52 @@ function calcHeadToHeadScore(team, other, games, rules) {
 
 function calcStats(teams, games, rules) {
   const r = rules || defaultRulesForSport("futebol");
-  const isSetSport = r.matchMode === "sets" || r.sport === "volei" || r.sport === "futevolei";
+  const setSportMode = isSetSport(r) || r.matchMode === "sets" || r.sport === "volei" || r.sport === "futevolei";
   const s = {};
   teams.forEach(t => { s[t] = { w:0, d:0, l:0, pts:0, gf:0, ga:0, played:0, setsFor:0, setsAgainst:0 }; });
+
   (games||[]).forEach(g => {
-    if (!hasScorePair(g.sA, g.sB)) return;
-    const a=+g.sA, b=+g.sB;
-    if (!s[g.a]||!s[g.b]) return;
-    s[g.a].played++; s[g.b].played++;
-    s[g.a].gf+=a; s[g.a].ga+=b; s[g.b].gf+=b; s[g.b].ga+=a;
-    if (isSetSport) {
-      const sets = Array.isArray(g.sets) ? g.sets : [];
+    if (!s[g.a] || !s[g.b]) return;
+
+    if (setSportMode) {
+      const sets = Array.isArray(g.sets) ? g.sets.filter(st => isValidNumber(st?.a) && isValidNumber(st?.b)) : [];
+      if (!sets.length) return;
+
       let aSets = 0, bSets = 0, aPts = 0, bPts = 0;
       sets.forEach(st => {
-        const pa = Number(st?.a ?? 0), pb = Number(st?.b ?? 0);
+        const pa = Number(st.a), pb = Number(st.b);
         aPts += pa; bPts += pb;
-        if (pa > pb) aSets++; else if (pb > pa) bSets++;
+        if (pa > pb) aSets++;
+        else if (pb > pa) bSets++;
       });
-      if (sets.length) {
-        s[g.a].gf += aPts - a; s[g.a].ga += bPts - b;
-        s[g.b].gf += bPts - b; s[g.b].ga += aPts - a;
-        s[g.a].setsFor += aSets; s[g.a].setsAgainst += bSets;
-        s[g.b].setsFor += bSets; s[g.b].setsAgainst += aSets;
-        if (g.status !== "finished") { s[g.a].played--; s[g.b].played--; }
-        if (g.status === "finished") {
-          if (aSets > bSets) { s[g.a].w++; s[g.b].l++; }
-          else if (bSets > aSets) { s[g.b].w++; s[g.a].l++; }
-        }
-      } else {
-        if (g.status === "finished") {
-          if (a>b){s[g.a].w++;s[g.b].l++;}
-          else if(b>a){s[g.b].w++;s[g.a].l++;}
-          else{s[g.a].d++;s[g.b].d++;}
-        } else { s[g.a].played--; s[g.b].played--; }
+
+      s[g.a].gf += aPts; s[g.a].ga += bPts;
+      s[g.b].gf += bPts; s[g.b].ga += aPts;
+      s[g.a].setsFor += aSets; s[g.a].setsAgainst += bSets;
+      s[g.b].setsFor += bSets; s[g.b].setsAgainst += aSets;
+
+      const setsToWin = Number(r.setsToWin || 2);
+      const finishedBySets = g.status === "finished" || aSets >= setsToWin || bSets >= setsToWin;
+      if (finishedBySets) {
+        s[g.a].played++; s[g.b].played++;
+        if (aSets > bSets) { s[g.a].w++; s[g.b].l++; }
+        else if (bSets > aSets) { s[g.b].w++; s[g.a].l++; }
+        else { s[g.a].d++; s[g.b].d++; }
       }
-    } else {
-      if (a>b){s[g.a].w++;s[g.a].pts+=(r.winPoints??3);s[g.b].l++;s[g.b].pts+=(r.lossPoints??0);}
-      else if(b>a){s[g.b].w++;s[g.b].pts+=(r.winPoints??3);s[g.a].l++;s[g.a].pts+=(r.lossPoints??0);}
-      else{s[g.a].d++;s[g.a].pts+=(r.drawPoints??1);s[g.b].d++;s[g.b].pts+=(r.drawPoints??1);}
+      return;
     }
+
+    if (!hasScorePair(g.sA, g.sB)) return;
+    const a=+g.sA, b=+g.sB;
+    s[g.a].played++; s[g.b].played++;
+    s[g.a].gf+=a; s[g.a].ga+=b; s[g.b].gf+=b; s[g.b].ga+=a;
+    if (a>b){s[g.a].w++;s[g.a].pts+=(r.winPoints??3);s[g.b].l++;s[g.b].pts+=(r.lossPoints??0);}
+    else if(b>a){s[g.b].w++;s[g.b].pts+=(r.winPoints??3);s[g.a].l++;s[g.a].pts+=(r.lossPoints??0);}
+    else{s[g.a].d++;s[g.a].pts+=(r.drawPoints??1);s[g.b].d++;s[g.b].pts+=(r.drawPoints??1);}
   });
+
   const rows = teams.map(t=>({team:t,...s[t],diff:s[t].gf-s[t].ga,setDiff:(s[t].setsFor||0)-(s[t].setsAgainst||0)}));
-  const criteria = r.standingsCriteria || (isSetSport ? ["wins","headToHead","setDiff","pointDiff","pointsFor"] : ["points","wins","headToHead","goalDiff","goalsFor"]);
+  const criteria = r.standingsCriteria || (setSportMode ? ["wins","headToHead","setDiff","pointDiff","pointsFor"] : ["points","wins","headToHead","goalDiff","goalsFor"]);
   return rows.sort((a,b)=>{
     for (const c of criteria) {
       let av=0,bv=0;
@@ -1277,9 +1281,11 @@ function deriveSetPatchFromInputs(g, t, setPairs) {
   return {
     sets,
     currentSet: finished ? Math.max(1, sets.length) : Math.min(maxSetsForTournament(t), sets.length + 1),
-    sA: null,
-    sB: null,
-    status: finished ? "finished" : "pending",
+    // Para modalidades por sets, sA/sB armazenam a parcial de sets vencidos.
+    // Isso mantém a tela, a classificação e a fase eliminatória coerentes após edição manual pelo Admin.
+    sA: sets.length ? aSets : null,
+    sB: sets.length ? bSets : null,
+    status: finished ? "finished" : (sets.length ? "live" : "pending"),
     finishedAt: finished ? (g?.finishedAt || Date.now()) : null
   };
 }
@@ -1529,7 +1535,7 @@ function render() {
 function renderTopbar() {
   const tb = div("topbar");
   const logo = el("div",{"class":"logo"});
-  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios · V8</small></div>`;
+  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios · V8.2.2</small></div>`;
   const right = div("topbar-right");
 
   if (STATE.lastUpdated) {
@@ -2488,7 +2494,7 @@ function renderTournament(t, readOnly) {
 function renderSingleGroup(t, readOnly) {
   const wrap = div("");
   const ranking = calcStats(t.teams, t.games, t.rules);
-  const allDone = t.games.every(g=>g.sA!==null&&g.sB!==null);
+  const allDone = isSetSportTournament(t) ? t.games.every(g=>g.status === "finished") : t.games.every(g=>g.sA!==null&&g.sB!==null);
   const top2 = ranking.slice(0,2).map(r=>r.team);
   const mid = ranking.slice(2,4).map(r=>r.team);
   const finals = t.finals||{finalGame:{sA:null,sB:null},thirdGame:{sA:null,sB:null}};
@@ -2532,7 +2538,7 @@ function renderMultiGroup(t, readOnly) {
   const gkeys = Object.keys(t.groups);
   const rankings = {};
   gkeys.forEach(k=>{ rankings[k]=calcStats(t.groups[k].teams,t.groups[k].games,t.rules); });
-  const allDone = gkeys.every(k=>t.groups[k].games.every(g=>g.sA!==null&&g.sB!==null));
+  const allDone = isSetSportTournament(t) ? gkeys.every(k=>t.groups[k].games.every(g=>g.status === "finished")) : gkeys.every(k=>t.groups[k].games.every(g=>g.sA!==null&&g.sB!==null));
   const colors = ["var(--accent)","var(--blue)","#f472b6","#fb923c","#a78bfa","#f87171"];
 
   const twoCol = div("two-col");
