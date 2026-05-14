@@ -994,6 +994,11 @@ function renderTechnicalTimeoutPanel(t, key, g) {
 }
 
 
+function isSetSport(r) {
+  r = r || {};
+  return r.matchMode === "sets" || r.sport === "volei" || r.sport === "futevolei";
+}
+
 function isSetSportTournament(t) {
   const r = t?.rules || {};
   return r.matchMode === "sets" || r.sport === "volei" || r.sport === "futevolei";
