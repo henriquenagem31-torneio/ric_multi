@@ -326,6 +326,51 @@ label.lbl { display: block; font-size: 10px; font-weight: 600; letter-spacing: 1
 .rule-box { background: var(--s1); border:1px solid var(--border); border-radius:8px; padding:10px; margin-top:10px; }
 .rule-list { margin-left:18px; font-size:12px; color:var(--muted); line-height:1.7; }
 
+
+/* ── MOBILE ADMIN UX ── */
+.admin-tabs-sticky {
+  position: sticky;
+  top: 58px;
+  z-index: 180;
+  background: var(--bg);
+  padding: 8px 0;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(29,31,51,.7);
+}
+
+@media (max-width: 680px) {
+  .admin-tabs-sticky {
+    top: 54px;
+    margin-left: -16px;
+    margin-right: -16px;
+    padding: 8px 16px;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .admin-tabs-sticky .tab {
+    flex: 0 0 auto;
+    padding: 10px 14px;
+    font-size: 14px;
+    min-height: 42px;
+  }
+
+  .topbar {
+    padding: 8px 12px;
+  }
+
+  .topbar .tabs .tab {
+    padding: 8px 10px;
+    font-size: 13px;
+    min-height: 36px;
+  }
+
+  .main {
+    padding: 14px 16px;
+  }
+}
+
 </style>
 
 </head>
@@ -376,11 +421,14 @@ function normalizeMultiData(data) {
   }
   return { tournaments:{}, updatedAt:null };
 }
-function tournamentEntries(statusFilter="all") {
+function tournamentEntries(statusFilter="all", mode="admin") {
   const ts = STATE.tournaments || {};
   return Object.entries(ts).map(([id,rec])=>({id, ...rec}))
     .filter(r => r && r.tournament && isValidTournament(r.tournament))
-    .filter(r => statusFilter === "all" || (r.status || "ativo") === statusFilter)
+    .filter(r => {
+      if (mode !== "admin" && !isPublishedTournament(r)) return false;
+      return statusFilter === "all" || (r.status || "ativo") === statusFilter;
+    })
     .sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
 }
 function selectTournament(id) {
@@ -443,16 +491,18 @@ async function saveMultiStore() {
   await dbSave({ tournaments: STATE.tournaments || {}, updatedAt: Date.now() });
 }
 function renderTournamentSelector(mode="public") {
-  const entries = tournamentEntries(mode === "admin" ? (STATE.adminListFilter || "ativo") : "ativo");
+  const entries = tournamentEntries(mode === "admin" ? (STATE.adminListFilter || "ativo") : "ativo", mode);
   const card = div("tournament-select-card");
   card.appendChild(renderCardHead(mode === "ref" ? "Selecionar torneio para arbitragem" : "Selecionar torneio"));
   if (!entries.length) {
-    card.appendChild(el("p", {style:{fontSize:"12px", color:"var(--muted)"}}, mode === "admin" ? "Nenhum torneio neste filtro." : "Nenhum torneio ativo disponível."));
+    card.appendChild(el("p", {style:{fontSize:"12px", color:"var(--muted)"}}, mode === "admin" ? "Nenhum torneio neste filtro." : "Nenhum torneio ativo publicado disponível."));
     return card;
   }
   const row = div("tournament-pill-row");
   entries.forEach(r=>{
-    const b = el("button", {class:"tournament-pill" + (String(STATE.selectedTournamentId)===String(r.id)?" on":"") + ((r.status||"ativo")==="encerrado"?" closed":""), onClick:()=>selectTournament(r.id)}, safeText(r.title || r.tournament?.title || "Torneio"));
+    const vis = r.tournament?.visibility || "publicado";
+    const label = `${safeText(r.title || r.tournament?.title || "Torneio")}${vis==="rascunho"?" · rascunho":""}`;
+    const b = el("button", {class:"tournament-pill" + (String(STATE.selectedTournamentId)===String(r.id)?" on":"") + ((r.status||"ativo")==="encerrado"?" closed":""), onClick:()=>selectTournament(r.id)}, label);
     row.appendChild(b);
   });
   card.appendChild(row);
@@ -466,17 +516,33 @@ function renderAdminTournamentList() {
     filters.appendChild(el("button", {class:"tournament-pill"+(STATE.adminListFilter===f.id?" on":""), onClick:()=>setState({adminListFilter:f.id})}, f.lbl));
   });
   card.appendChild(filters);
-  const entries = tournamentEntries(STATE.adminListFilter || "ativo");
+  const entries = tournamentEntries(STATE.adminListFilter || "ativo", "admin");
   if (!entries.length) card.appendChild(el("p", {style:{fontSize:"12px", color:"var(--muted)", marginTop:"10px"}}, "Nenhum torneio encontrado neste filtro."));
   entries.forEach(r=>{
     const row = div("admin-list-row" + (String(STATE.selectedTournamentId)===String(r.id)?" on":""));
     const info = div("");
+    const vis = r.tournament?.visibility || "publicado";
     info.appendChild(el("div", {style:{fontWeight:"700"}}, safeText(r.title || r.tournament?.title || "Torneio")));
-    info.appendChild(el("div", {class:"tournament-meta"}, `${(r.status||"ativo").toUpperCase()} · ${r.updatedAt ? new Date(r.updatedAt).toLocaleString("pt-BR") : "sem data"}`));
+    info.appendChild(el("div", {class:"tournament-meta"}, `${(r.status||"ativo").toUpperCase()} · ${vis.toUpperCase()} · ${r.updatedAt ? new Date(r.updatedAt).toLocaleString("pt-BR") : "sem data"}`));
     row.appendChild(info);
     const acts = div("court-pick");
     acts.appendChild(btn("btn-blue btn-sm", "Abrir", ()=>selectTournament(r.id)));
-    if((r.status||"ativo")!=="encerrado") acts.appendChild(btn("btn-danger btn-sm", "Encerrar", async ()=>{ STATE.tournaments[r.id] = {...r, status:"encerrado", updatedAt:Date.now()}; if(STATE.selectedTournamentId===r.id) STATE.lastUpdated=STATE.tournaments[r.id].updatedAt; render(); await saveMultiStore(); }));
+    if ((r.status||"ativo") !== "encerrado") {
+      acts.appendChild(btn(vis==="rascunho"?"btn-primary btn-sm":"btn-ghost btn-sm", vis==="rascunho"?"Publicar":"Voltar p/ rascunho", async ()=>{
+        const rec = STATE.tournaments[r.id];
+        const nt = addAdminLog({...rec.tournament, visibility: vis==="rascunho"?"publicado":"rascunho"}, vis==="rascunho"?"Torneio publicado":"Torneio voltou para rascunho", "");
+        STATE.tournaments[r.id] = {...rec, tournament: nt, title:nt.title, status: rec.status || "ativo", updatedAt:Date.now()};
+        if (STATE.selectedTournamentId===r.id) { STATE.tournament=nt; STATE.lastUpdated=STATE.tournaments[r.id].updatedAt; }
+        render(); await saveMultiStore();
+      }));
+      acts.appendChild(btn("btn-danger btn-sm", "Encerrar", async ()=>{
+        const rec = STATE.tournaments[r.id];
+        const nt = addAdminLog(rec.tournament, "Torneio encerrado", "");
+        STATE.tournaments[r.id] = {...rec, tournament: nt, status:"encerrado", updatedAt:Date.now()};
+        if(STATE.selectedTournamentId===r.id){ STATE.tournament=nt; STATE.lastUpdated=STATE.tournaments[r.id].updatedAt; }
+        render(); await saveMultiStore();
+      }));
+    }
     row.appendChild(acts);
     card.appendChild(row);
   });
@@ -1270,6 +1336,48 @@ function persistTournamentWithDerived(t, reason) {
   persistTournament(rebuildDerivedElimination(t, reason));
 }
 
+
+function addAdminLog(t, action, detail) {
+  const entry = {
+    at: Date.now(),
+    action: action || "Alteração",
+    detail: detail || "",
+    user: "Admin"
+  };
+  return {
+    ...t,
+    adminLog: [entry, ...(t?.adminLog || [])].slice(0, 50)
+  };
+}
+
+async function persistTournamentLogged(t, action, detail, derive=false) {
+  const logged = addAdminLog(t, action, detail);
+  if (derive) await persistTournamentWithDerived(logged, detail || action);
+  else await persistTournament(logged);
+}
+
+function renderAdminLogCard(t) {
+  const card = div("card");
+  card.appendChild(renderCardHead("Log administrativo"));
+  const logs = t?.adminLog || [];
+  if (!logs.length) {
+    card.appendChild(el("p", {style:{fontSize:"12px",color:"var(--muted)"}}, "Nenhuma alteração administrativa registrada ainda."));
+    return card;
+  }
+  logs.slice(0, 10).forEach(l => {
+    const row = el("div", {style:{padding:"8px 0",borderBottom:"1px solid var(--border)"}});
+    row.appendChild(el("div", {style:{fontSize:"12px",fontWeight:"700"}}, safeText(l.action)));
+    row.appendChild(el("div", {style:{fontSize:"10px",color:"var(--muted)"}}, `${new Date(l.at || Date.now()).toLocaleString("pt-BR")} · ${safeText(l.detail)}`));
+    card.appendChild(row);
+  });
+  return card;
+}
+
+function isPublishedTournament(t) {
+  return (t?.visibility || "publicado") === "publicado" && t.status !== "rascunho";
+}
+
+
 function deriveSetPatchFromInputs(g, t, setPairs) {
   const sets = [];
   for (let i = 0; i < setPairs.length; i++) {
@@ -1333,24 +1441,30 @@ function setState(patch) {
 async function persistTournament(t) {
   const now = Date.now();
   let id = STATE.selectedTournamentId;
+  const isNew = !id;
   if (!id) {
     id = makeTournamentId();
     STATE.selectedTournamentId = id;
   }
   const prev = STATE.tournaments?.[id] || {};
   if (t === null) {
-    // Na versão multi, Encerrar não apaga: apenas muda o status.
     const kept = prev.tournament || STATE.tournament;
-    STATE.tournaments = { ...(STATE.tournaments||{}), [id]: { ...prev, id, title: kept?.title || prev.title || "Torneio", status:"encerrado", tournament: kept, updatedAt: now } };
-    STATE.tournament = kept || null;
+    const nt = kept ? addAdminLog(kept, "Torneio encerrado", "") : kept;
+    STATE.tournaments = { ...(STATE.tournaments||{}), [id]: { ...prev, id, title: nt?.title || prev.title || "Torneio", status:"encerrado", tournament: nt, updatedAt: now } };
+    STATE.tournament = nt || null;
     STATE.lastUpdated = now;
     render();
     await saveMultiStore();
     return;
   }
-  STATE.tournament = t;
+  const prepared = {
+    ...t,
+    visibility: t.visibility || prev.tournament?.visibility || (isNew ? "rascunho" : "publicado"),
+    adminLog: t.adminLog || (isNew ? [{at:now, action:"Torneio criado", detail:"Criado como rascunho", user:"Admin"}] : (prev.tournament?.adminLog || []))
+  };
+  STATE.tournament = prepared;
   STATE.lastUpdated = now;
-  STATE.tournaments = { ...(STATE.tournaments||{}), [id]: { ...prev, id, title: t.title || prev.title || "Torneio", status: prev.status || "ativo", tournament: t, updatedAt: now } };
+  STATE.tournaments = { ...(STATE.tournaments||{}), [id]: { ...prev, id, title: prepared.title || prev.title || "Torneio", status: prev.status || "ativo", tournament: prepared, updatedAt: now } };
   render();
   await saveMultiStore();
 }
@@ -1542,7 +1656,7 @@ function render() {
 function renderTopbar() {
   const tb = div("topbar");
   const logo = el("div",{"class":"logo"});
-  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios · V9.3.2.3</small></div>`;
+  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios · V10.1.1.2.3</small></div>`;
   const right = div("topbar-right");
 
   if (STATE.lastUpdated) {
@@ -1632,7 +1746,7 @@ function renderPublic() {
   const wrap = div("");
   wrap.appendChild(renderTournamentSelector("public"));
   const rec = selectedTournamentRecord();
-  const t = rec?.status === "ativo" ? STATE.tournament : null;
+  const t = (rec?.status === "ativo" && isPublishedTournament(rec?.tournament)) ? STATE.tournament : null;
 
   if(!t){
     const e = div("empty");
@@ -1725,6 +1839,7 @@ function renderTournamentInfoCard(t, adminMode) {
 
   const rows = [
     ["Nome", t?.title],
+    ["Publicação", isPublishedTournament(t) ? "Publicado" : "Rascunho"],
     ["Modalidade", sportLabel(r.sport)],
     ["Formato", formatLabel(t?.fmt || r.format)],
     ["Número de equipes", getTournamentTeamCount(t)],
@@ -1899,7 +2014,7 @@ function renderAdmin() {
 
   const t = isValidTournament(STATE.tournament) ? STATE.tournament : null;
   if (!t && STATE.adminTab !== "create") STATE.adminTab = "create";
-  const tabs = el("div",{"class":"tabs","style":{"marginBottom":"12px","display":"inline-flex"}});
+  const tabs = el("div",{"class":"tabs admin-tabs-sticky","style":{"display":"inline-flex"}});
   const tabDefs = [
     {id:"create",lbl:"➕ Criar"},
     ...(t?[{id:"manage",lbl:"✏️ Gerenciar"},{id:"court",lbl:"🎾 Quadra"},{id:"awards",lbl:"🏅 Prêmios"}]:[])
@@ -1909,6 +2024,7 @@ function renderAdmin() {
     tabs.appendChild(tb);
   });
   wrap.appendChild(tabs);
+  wrap.appendChild(el("div", {style:{fontSize:"10px",color:"var(--muted)",margin:"-4px 0 10px"}}, "Menu fixo no celular para facilitar a navegação durante a rolagem."));
 
   if(STATE.adminTab==="create") wrap.appendChild(renderAdminCreate());
   else if(STATE.adminTab==="manage"&&t) wrap.appendChild(renderAdminManage(t));
@@ -2296,7 +2412,21 @@ function renderAdminTournamentEditCard(t) {
   const structuralMsg = fmtChanged
     ? "Formato alterado: para aplicar a mudança é necessário usar Recriar estrutura."
     : "Salvar regras/ficha preserva jogos e placares. Recriar estrutura refaz grupos/jogos/chaveamento e reinicia placares.";
-  card.appendChild(el("div", {class:fmtChanged?"notice notice-info":"notice notice-info", style:{marginTop:"10px"}}, structuralMsg));
+  card.appendChild(el("div", {class:"notice notice-info", style:{marginTop:"10px"}}, structuralMsg));
+
+  if (fmtChanged || String(normalizeGroupCountForFormat(cfg.fmt, cfg.groupCount)) !== String(getTournamentGroupCount(t))) {
+    const preview = el("div", {style:{marginTop:"8px",padding:"9px 10px",background:"var(--s1)",border:"1px solid var(--border)",borderRadius:"7px",fontSize:"11px"}});
+    preview.appendChild(el("div", {style:{fontWeight:"700",marginBottom:"4px"}}, "Prévia da alteração estrutural"));
+    preview.appendChild(el("div", {}, `Formato: ${formatLabel(t.fmt)} → ${formatLabel(cfg.fmt)}`));
+    preview.appendChild(el("div", {}, `Grupos: ${safeText(getTournamentGroupCount(t))} → ${safeText(normalizeGroupCountForFormat(cfg.fmt, cfg.groupCount))}`));
+    preview.appendChild(el("div", {}, `Equipes/Duplas: ${safeText(getTournamentTeamCount(t))} → ${safeText(parseCandidatesText(cfg.teamsText||"").length)}`));
+    preview.appendChild(el("div", {style:{color:"var(--red)",marginTop:"5px"}}, "Recriar estrutura reinicia jogos, placares, grupos e chaveamento."));
+    card.appendChild(preview);
+  }
+
+  if (t.brk && eliminationHasResults(t.brk)) {
+    card.appendChild(el("div", {class:"notice notice-info", style:{marginTop:"8px"}}, "Atenção: este torneio já possui resultados na eliminatória. Alterações estruturais podem exigir conferência manual do chaveamento."));
+  }
 
   card.appendChild(el("div", {style:{marginTop:"10px", display:"flex", gap:"8px", flexWrap:"wrap"}},
     btn("btn-primary btn-sm", "Salvar regras/ficha", ()=>{
@@ -2334,7 +2464,7 @@ function renderAdminTournamentEditCard(t) {
         rules,
         tp: rules.includeThirdPlace === false ? null : (t.tp || {sA:null,sB:null})
       };
-      persistTournamentWithDerived(updated, "Regras/ficha editadas pelo Admin");
+      persistTournamentLogged(updated, "Regras/ficha editadas", "Parâmetros do torneio atualizados", true);
       STATE.adminEditDraft = null;
       STATE.adminEditDraftTournamentId = null;
     }),
@@ -2349,7 +2479,7 @@ function renderAdminTournamentEditCard(t) {
           qpg: normalizeQpgForFormat(cfg.fmt, cfg.qpg),
           includeThirdPlace: (cfg.fmt === "mg" || cfg.fmt === "se") ? cfg.includeThirdPlace !== false : false
         });
-        persistTournament(rebuilt);
+        persistTournamentLogged(rebuilt, "Estrutura recriada", `Formato ${formatLabel(t.fmt)} → ${formatLabel(rebuilt.fmt)}`, false);
         STATE.adminEditDraft = null;
         STATE.adminEditDraftTournamentId = null;
       }
@@ -2378,18 +2508,20 @@ function renderAdminManage(t) {
   const desc = el("textarea", {class:"textarea", style:{minHeight:"80px"}, placeholder:"Ex: Semifinal na quadra central. Aquecimento de 5 minutos. Premiação às 18h..."}, safeText(t.description)==="-"?"":String(t.description||""));
   notesCard.appendChild(desc);
   notesCard.appendChild(el("div", {style:{marginTop:"8px", display:"flex", gap:"8px", flexWrap:"wrap"}},
-    btn("btn-primary btn-sm", "Salvar informações", () => persistTournament({...t, description:desc.value.trim()})),
-    btn("btn-ghost btn-sm", "Limpar", () => { desc.value=""; persistTournament({...t, description:""}); })
+    btn("btn-primary btn-sm", "Salvar informações", () => persistTournamentLogged({...t, description:desc.value.trim()}, "Informações adicionais editadas", "")),
+    btn("btn-ghost btn-sm", "Limpar", () => { desc.value=""; persistTournamentLogged({...t, description:""}, "Informações adicionais limpas", ""); })
   ));
   if (t.bracketUpdatedAt) {
     notesCard.appendChild(el("div", {class:"notice notice-info", style:{marginTop:"10px"}}, `Chaveamento recalculado em ${new Date(t.bracketUpdatedAt).toLocaleTimeString("pt-BR")} · ${safeText(t.bracketUpdatedReason)}${t.bracketHadResultsBeforeRebuild?" · resultados anteriores da eliminatória foram reiniciados":""}`));
   }
   wrap.appendChild(notesCard);
+  wrap.appendChild(renderAdminLogCard(t));
 
   const n = div("notice notice-info");
   n.textContent = "No Gerenciar, o administrador pode corrigir placares e sets. Se a classificação mudar e já houver chave eliminatória gerada, a chave será recalculada automaticamente a partir dos novos classificados.";
   wrap.appendChild(n);
 
+  if (t.brk) wrap.appendChild(el("div", {class:"notice notice-info"}, "Correção de placares pode alterar a classificação e recalcular o chaveamento eliminatório."));
   wrap.appendChild(renderTournament(t, false));
   return wrap;
 }
@@ -3197,10 +3329,13 @@ function renderBracket(rounds, readOnly, t, onUpdate) {
       });
       if (isBye) {
         const byeTeam = g.byeWinner || g.a || g.b;
-        slot.appendChild(el("div",{"style":{fontSize:"10px",color:"var(--blue)",marginTop:"5px"}},`BYE automático: ${safeText(byeTeam)} avança sem placar`));
+        const byeBox = el("div",{"style":{fontSize:"11px",color:"var(--blue)",marginTop:"7px",padding:"7px 8px",background:"var(--bluefade)",border:"1px solid rgba(61,142,255,.25)",borderRadius:"6px"}},`BYE automático · ${safeText(byeTeam)} já avançou para a próxima fase sem placar.`);
+        slot.appendChild(byeBox);
       }
-      if (g.aGroup || g.bGroup) {
-        slot.appendChild(el("div",{"style":{fontSize:"9px",color:"var(--muted)",marginTop:"3px"}},`Seeds: ${safeText(g.aSeed)}${g.aGroup?`/${g.aGroup}`:""} × ${safeText(g.bSeed)}${g.bGroup?`/${g.bGroup}`:""}`));
+      if (g.aGroup || g.bGroup || g.aSeed || g.bSeed) {
+        const originA = g.a ? `Seed ${safeText(g.aSeed)}${g.aGroup?` · ${g.aGroup}`:""}` : "BYE";
+        const originB = g.b ? `Seed ${safeText(g.bSeed)}${g.bGroup?` · ${g.bGroup}`:""}` : "BYE";
+        slot.appendChild(el("div",{"style":{fontSize:"9px",color:"var(--muted)",marginTop:"3px"}},`${originA} × ${originB}`));
       }
       wrap.appendChild(slot);
     });
