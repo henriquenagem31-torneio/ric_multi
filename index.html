@@ -371,6 +371,44 @@ label.lbl { display: block; font-size: 10px; font-weight: 600; letter-spacing: 1
   }
 }
 
+
+/* ── ADMIN STICKY TABS FIX V10.2 ── */
+.admin-tabs-sticky {
+  position: -webkit-sticky !important;
+  position: sticky !important;
+  top: 74px !important;
+  z-index: 500 !important;
+  background: var(--bg) !important;
+  padding: 8px 0 10px !important;
+  margin-bottom: 12px !important;
+  border-bottom: 1px solid rgba(29,31,51,.9) !important;
+  box-shadow: 0 8px 18px rgba(0,0,0,.22);
+}
+
+@media (max-width: 680px) {
+  .admin-tabs-sticky {
+    top: 72px !important;
+    margin-left: -16px !important;
+    margin-right: -16px !important;
+    padding: 8px 16px 10px !important;
+    overflow-x: auto !important;
+    flex-wrap: nowrap !important;
+    display: flex !important;
+    width: calc(100% + 32px) !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .admin-tabs-sticky::-webkit-scrollbar {
+    display: none;
+  }
+
+  .admin-tabs-sticky .tab {
+    flex: 0 0 auto !important;
+    min-width: max-content;
+  }
+}
+
 </style>
 
 </head>
@@ -1656,7 +1694,7 @@ function render() {
 function renderTopbar() {
   const tb = div("topbar");
   const logo = el("div",{"class":"logo"});
-  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios · V10.1.1.2.3</small></div>`;
+  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios · V10.2.1.2.3</small></div>`;
   const right = div("topbar-right");
 
   if (STATE.lastUpdated) {
@@ -2024,8 +2062,6 @@ function renderAdmin() {
     tabs.appendChild(tb);
   });
   wrap.appendChild(tabs);
-  wrap.appendChild(el("div", {style:{fontSize:"10px",color:"var(--muted)",margin:"-4px 0 10px"}}, "Menu fixo no celular para facilitar a navegação durante a rolagem."));
-
   if(STATE.adminTab==="create") wrap.appendChild(renderAdminCreate());
   else if(STATE.adminTab==="manage"&&t) wrap.appendChild(renderAdminManage(t));
   else if(STATE.adminTab==="court"&&t) wrap.appendChild(renderCourtPanel(t));
