@@ -1216,7 +1216,7 @@ function buildTournament(p) {
   }
   if(p.fmt==="se"){
     const t=p.allT.length?p.allT:Object.values(p.groups).flat();
-    return{...base,teams:t,brk:buildBracket(t),tp:{sA:null,sB:null}};
+    return{...base,teams:t,brk:buildBracket(t, rules.bracketRules||{}),tp:rules.includeThirdPlace===false?null:{sA:null,sB:null}};
   }
   if(p.fmt==="sw"){
     const t=p.allT.length?p.allT:Object.values(p.groups).flat();
@@ -1254,7 +1254,12 @@ function rebuildDerivedElimination(t, reason) {
   const hadResults = eliminationHasResults(t.brk);
   return {
     ...t,
-    brk: buildBracket(seeds, t.rules?.bracketRules || {}),
+    brk: (() => {
+      const nb = buildBracket(seeds, t.rules?.bracketRules || {});
+      (t.brk||[]).forEach((old,i)=>{ if(nb[i] && old.name) nb[i].name = old.name; });
+      return nb;
+    })(),
+    tp: t.rules?.includeThirdPlace === false ? null : (t.tp || {sA:null,sB:null}),
     bracketUpdatedAt: Date.now(),
     bracketUpdatedReason: reason || "Classificação recalculada",
     bracketHadResultsBeforeRebuild: hadResults
@@ -1313,6 +1318,8 @@ let STATE = {
   voteId: {},          // { awardId: teamVotedFor } per session
   createDraft: { text: "", title: "", teams: "", fmt: "sg" },
   refCourtFilter: "", // id da quadra selecionada pelo árbitro; vazio = nenhuma quadra selecionada
+  adminEditDraft: null,
+  adminEditDraftTournamentId: null,
 };
 
 function setState(patch) {
@@ -1535,7 +1542,7 @@ function render() {
 function renderTopbar() {
   const tb = div("topbar");
   const logo = el("div",{"class":"logo"});
-  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios · V8.3.3</small></div>`;
+  logo.innerHTML = `🏆 <div><span>TORNEIO PRO</span><small>multi torneios · V9.3.2.3</small></div>`;
   const right = div("topbar-right");
 
   if (STATE.lastUpdated) {
@@ -1675,8 +1682,9 @@ function getTournamentTeamCount(t) {
 
 function getTournamentGroupCount(t) {
   if (!t) return 0;
+  if (t.fmt === "sg" || t.fmt === "se" || t.fmt === "sw") return 1;
   if (t.groups) return Object.keys(t.groups).length;
-  return Number(t.rules?.groupCount || 0) || 0;
+  return Number(t.rules?.groupCount || 0);
 }
 
 function getSetSummary(t) {
@@ -1725,7 +1733,8 @@ function renderTournamentInfoCard(t, adminMode) {
     ["Regra de sets", getSetSummary(t)],
     ["Pontos por set", isSetSport(r) ? safeText(r.pointsPerSet) : null],
     ["Tie-break", isSetSport(r) ? safeText(r.tieBreakPoints || 15) : null],
-    ["Pontuação", !isSetSport(r) ? `Vitória ${safeText(r.winPoints ?? 3)} · Empate ${safeText(r.drawPoints ?? 1)} · Derrota ${safeText(r.lossPoints ?? 0)}` : null]
+    ["Pontuação", !isSetSport(r) ? `Vitória ${safeText(r.winPoints ?? 3)} · Empate ${safeText(r.drawPoints ?? 1)} · Derrota ${safeText(r.lossPoints ?? 0)}` : null],
+    ["Disputa de 3º lugar", r.includeThirdPlace === false ? "Não" : "Sim"]
   ];
   card.appendChild(renderInfoGrid(rows));
 
@@ -1915,7 +1924,7 @@ function renderAdmin() {
 function renderAdminCreate() {
   const wrap = div("");
   const draft = STATE.createDraft || (STATE.createDraft = {});
-  if (!draft.sport) Object.assign(draft, {sport:"futebol", fmt:"sg", groupCount:2, qpg:2, setsToWin:2, pointsPerSet:25, tieBreakPoints:15, teamCount:"", teams:"", title:""});
+  if (!draft.sport) Object.assign(draft, {sport:"futebol", fmt:"sg", groupCount:2, qpg:2, setsToWin:2, pointsPerSet:25, tieBreakPoints:15, winPoints:3, drawPoints:1, lossPoints:0, includeThirdPlace:true, teamCount:"", teams:"", title:""});
 
   const card = div("card");
   card.appendChild(renderCardHead("Novo Torneio — Assistente V3"));
@@ -1980,7 +1989,7 @@ function renderAdminCreate() {
     card.appendChild(gr);
   }
 
-  const isSetSport = draft.sport === "volei" || draft.sport === "futevolei";
+  const isSetSport = draft.sport === "volei" || draft.sport === "voleipraia" || draft.sport === "futevolei";
   card.appendChild(el("div", {class:"section-lbl"}, "Regras da partida"));
   const rulesRow = div("wiz-row");
   if (isSetSport) {
@@ -1998,15 +2007,23 @@ function renderAdminCreate() {
     tw.appendChild(ti); rulesRow.appendChild(tw);
   } else {
     const wp = div(""); wp.appendChild(el("label", {class:"lbl"}, "Pontos por vitória"));
-    wp.appendChild(el("input", {class:"inp", type:"number", value:"3", disabled:"disabled"})); rulesRow.appendChild(wp);
+    wp.appendChild(el("input", {class:"inp", type:"number", value:draft.winPoints ?? 3, onInput:e=>{draft.winPoints=e.target.value;}})); rulesRow.appendChild(wp);
     const dp = div(""); dp.appendChild(el("label", {class:"lbl"}, "Pontos por empate"));
-    dp.appendChild(el("input", {class:"inp", type:"number", value:"1", disabled:"disabled"})); rulesRow.appendChild(dp);
+    dp.appendChild(el("input", {class:"inp", type:"number", value:draft.drawPoints ?? 1, onInput:e=>{draft.drawPoints=e.target.value;}})); rulesRow.appendChild(dp);
     const lp = div(""); lp.appendChild(el("label", {class:"lbl"}, "Pontos por derrota"));
-    lp.appendChild(el("input", {class:"inp", type:"number", value:"0", disabled:"disabled"})); rulesRow.appendChild(lp);
+    lp.appendChild(el("input", {class:"inp", type:"number", value:draft.lossPoints ?? 0, onInput:e=>{draft.lossPoints=e.target.value;}})); rulesRow.appendChild(lp);
   }
   card.appendChild(rulesRow);
 
-  const previewRules = isSetSport ? {...defaultRulesForSport(draft.sport), setsToWin:Number(draft.setsToWin||2), pointsPerSet:Number(draft.pointsPerSet||25), tieBreakPoints:Number(draft.tieBreakPoints||15)} : defaultRulesForSport(draft.sport);
+  const thirdRow = el("div", {style:{margin:"8px 0 10px", padding:"8px 10px", background:"var(--s1)", border:"1px solid var(--border)", borderRadius:"7px"}});
+  const thirdChk = el("input", {type:"checkbox", checked:draft.includeThirdPlace!==false?"checked":null, onChange:e=>{draft.includeThirdPlace=e.target.checked;}});
+  thirdRow.appendChild(thirdChk);
+  thirdRow.appendChild(el("span", {style:{marginLeft:"8px", fontSize:"12px"}}, "Incluir disputa de 3º lugar quando houver fase eliminatória"));
+  card.appendChild(thirdRow);
+
+  const previewRules = isSetSport
+    ? {...defaultRulesForSport(draft.sport), setsToWin:Number(draft.setsToWin||2), pointsPerSet:Number(draft.pointsPerSet||25), tieBreakPoints:Number(draft.tieBreakPoints||15), includeThirdPlace:draft.includeThirdPlace!==false}
+    : {...defaultRulesForSport(draft.sport), winPoints:Number(draft.winPoints ?? 3), drawPoints:Number(draft.drawPoints ?? 1), lossPoints:Number(draft.lossPoints ?? 0), includeThirdPlace:draft.includeThirdPlace!==false};
   const rb = div("rule-box");
   rb.appendChild(el("div", {style:{fontWeight:"700", marginBottom:"5px"}}, "Critérios de desempate"));
   const ol = el("ol", {class:"rule-list"});
@@ -2038,14 +2055,22 @@ function renderAdminCreate() {
         teams.forEach((tm,i)=>{ groups[`GRUPO ${String.fromCharCode(65+(i%groupCount))}`].push(tm); });
       }
       const baseRules = defaultRulesForSport(draft.sport);
-      const rules = {...baseRules, sport:draft.sport, format:draft.fmt, teamCount:teams.length, groupCount:draft.fmt==="mg"?groupCount:0, qualifiersPerGroup:Number(draft.qpg||2)};
-      if(isSetSport){ rules.setsToWin=Number(draft.setsToWin||2); rules.pointsPerSet=Number(draft.pointsPerSet||25); rules.tieBreakPoints=Number(draft.tieBreakPoints||15); }
-      STATE.createDraft = {sport:"futebol", fmt:"sg", groupCount:2, qpg:2, setsToWin:2, pointsPerSet:25, tieBreakPoints:15, teamCount:"", teams:"", title:""};
+      const rules = {...baseRules, sport:draft.sport, format:draft.fmt, teamCount:teams.length, groupCount:draft.fmt==="mg"?groupCount:0, qualifiersPerGroup:Number(draft.qpg||2), includeThirdPlace:draft.includeThirdPlace!==false};
+      if(isSetSport){
+        rules.setsToWin=Number(draft.setsToWin||2);
+        rules.pointsPerSet=Number(draft.pointsPerSet||25);
+        rules.tieBreakPoints=Number(draft.tieBreakPoints||15);
+      } else {
+        rules.winPoints=Number(draft.winPoints ?? 3);
+        rules.drawPoints=Number(draft.drawPoints ?? 1);
+        rules.lossPoints=Number(draft.lossPoints ?? 0);
+      }
+      STATE.createDraft = {sport:"futebol", fmt:"sg", groupCount:2, qpg:2, setsToWin:2, pointsPerSet:25, tieBreakPoints:15, winPoints:3, drawPoints:1, lossPoints:0, includeThirdPlace:true, teamCount:"", teams:"", title:""};
       STATE.selectedTournamentId = makeTournamentId();
       persistTournament(buildTournament({title, fmt:draft.fmt, sport:draft.sport, rules, groups, allT:draft.fmt==="mg"?[]:teams, qpg:Number(draft.qpg||2), swR:4, groupCount}));
       setState({adminTab:"manage"});
     }),
-    btn("btn-ghost", "Limpar formulário", ()=>{ STATE.createDraft={sport:"futebol", fmt:"sg", groupCount:2, qpg:2, setsToWin:2, pointsPerSet:25, tieBreakPoints:15, teamCount:"", teams:"", title:""}; render(); })
+    btn("btn-ghost", "Limpar formulário", ()=>{ STATE.createDraft={sport:"futebol", fmt:"sg", groupCount:2, qpg:2, setsToWin:2, pointsPerSet:25, tieBreakPoints:15, winPoints:3, drawPoints:1, lossPoints:0, includeThirdPlace:true, teamCount:"", teams:"", title:""}; render(); })
   ));
 
   wrap.appendChild(card);
@@ -2055,6 +2080,285 @@ function renderAdminCreate() {
 // ══════════════════════════════════════════════════════════
 //  ADMIN: MANAGE
 // ══════════════════════════════════════════════════════════
+
+function splitTeamsIntoGroups(teams, groupCount) {
+  const groups = {};
+  const n = Math.max(1, Number(groupCount || 1));
+  for (let i = 0; i < n; i++) groups[`GRUPO ${String.fromCharCode(65+i)}`] = [];
+  (teams || []).forEach((tm, i) => groups[`GRUPO ${String.fromCharCode(65+(i % n))}`].push(tm));
+  return groups;
+}
+
+function normalizeGroupCountForFormat(fmt, groupCount) {
+  if (fmt === "sg" || fmt === "se" || fmt === "sw") return 1;
+  return Math.max(2, Number(groupCount || 2));
+}
+
+function normalizeQpgForFormat(fmt, qpg) {
+  if (fmt === "sg" || fmt === "se" || fmt === "sw") return 0;
+  return Math.max(1, Number(qpg || 2));
+}
+
+function buildEditedTournamentFromForm(t, cfg) {
+  const teams = parseCandidatesText(cfg.teamsText || "").filter(Boolean);
+  const fmt = cfg.fmt || t.fmt || "sg";
+  const groupCount = normalizeGroupCountForFormat(fmt, cfg.groupCount || t.rules?.groupCount || getTournamentGroupCount(t) || 2);
+  const qpg = normalizeQpgForFormat(fmt, cfg.qpg || t.qpg || t.rules?.qualifiersPerGroup || 2);
+  const sport = cfg.sport || t.rules?.sport || "futebol";
+  const setSport = sport === "volei" || sport === "voleipraia" || sport === "futevolei";
+  const baseRules = defaultRulesForSport(sport);
+  const rules = {
+    ...baseRules,
+    ...(t.rules || {}),
+    sport,
+    format: fmt,
+    teamCount: teams.length,
+    groupCount: fmt === "mg" ? groupCount : 1,
+    qualifiersPerGroup: fmt === "mg" ? qpg : 0,
+    includeThirdPlace: cfg.includeThirdPlace !== false
+  };
+  if (setSport) {
+    rules.matchMode = "sets";
+    rules.setsToWin = Number(cfg.setsToWin || rules.setsToWin || 2);
+    rules.pointsPerSet = Number(cfg.pointsPerSet || rules.pointsPerSet || 25);
+    rules.tieBreakPoints = Number(cfg.tieBreakPoints || rules.tieBreakPoints || 15);
+  } else {
+    rules.matchMode = "score";
+    rules.winPoints = Number(cfg.winPoints ?? rules.winPoints ?? 3);
+    rules.drawPoints = Number(cfg.drawPoints ?? rules.drawPoints ?? 1);
+    rules.lossPoints = Number(cfg.lossPoints ?? rules.lossPoints ?? 0);
+  }
+
+  const groups = fmt === "mg" ? splitTeamsIntoGroups(teams, groupCount) : {};
+  const rebuilt = buildTournament({
+    title: (cfg.title || t.title || "Torneio").trim(),
+    description: t.description || "",
+    fmt,
+    sport,
+    rules,
+    groups,
+    allT: fmt === "mg" ? [] : teams,
+    qpg,
+    swR: t.swR || 4,
+    groupCount
+  });
+
+  return {
+    ...rebuilt,
+    description: t.description || "",
+    courts: t.courts || rebuilt.courts,
+    awards: t.awards || [],
+    votes: t.votes || {},
+    votingOpen: !!t.votingOpen,
+    createdAt: t.createdAt || rebuilt.createdAt,
+    tp: rules.includeThirdPlace === false ? null : (t.tp || {sA:null,sB:null})
+  };
+}
+
+function renderAdminTournamentEditCard(t) {
+  const card = div("card");
+  card.appendChild(renderCardHead("Editar torneio e regras"));
+
+  const tid = STATE.selectedTournamentId || t?.id || "__current__";
+  if (!STATE.adminEditDraft || STATE.adminEditDraftTournamentId !== tid) {
+    STATE.adminEditDraftTournamentId = tid;
+    STATE.adminEditDraft = {
+      title: t.title || "",
+      sport: t.rules?.sport || "futebol",
+      fmt: t.fmt || "sg",
+      teamsText: uniqueTeams(t).join(", "),
+      groupCount: normalizeGroupCountForFormat(t.fmt || "sg", getTournamentGroupCount(t) || t.rules?.groupCount || 2),
+      qpg: normalizeQpgForFormat(t.fmt || "sg", t.qpg || t.rules?.qualifiersPerGroup || 2),
+      setsToWin: t.rules?.setsToWin || 2,
+      pointsPerSet: t.rules?.pointsPerSet || 25,
+      tieBreakPoints: t.rules?.tieBreakPoints || 15,
+      winPoints: t.rules?.winPoints ?? 3,
+      drawPoints: t.rules?.drawPoints ?? 1,
+      lossPoints: t.rules?.lossPoints ?? 0,
+      includeThirdPlace: t.rules?.includeThirdPlace !== false
+    };
+  }
+
+  const cfg = STATE.adminEditDraft;
+  const updateCfg = (patch, shouldRender=false) => {
+    Object.assign(cfg, patch);
+    STATE.adminEditDraft = cfg;
+    if (shouldRender) render();
+  };
+
+  const row1 = div("wiz-row");
+  const titleWrap = div("");
+  titleWrap.appendChild(el("label", {class:"lbl"}, "Nome do torneio"));
+  titleWrap.appendChild(el("input", {class:"inp", value:cfg.title, onInput:e=>updateCfg({title:e.target.value})}));
+  row1.appendChild(titleWrap);
+
+  const sportWrap = div("");
+  sportWrap.appendChild(el("label", {class:"lbl"}, "Modalidade"));
+  const sportSel = el("select", {class:"inp", onChange:e=>{
+    const sp = e.target.value;
+    const r = defaultRulesForSport(sp);
+    updateCfg({
+      sport: sp,
+      setsToWin: r.setsToWin || cfg.setsToWin || 2,
+      pointsPerSet: r.pointsPerSet || cfg.pointsPerSet || 25,
+      tieBreakPoints: r.tieBreakPoints || cfg.tieBreakPoints || 15,
+      winPoints: r.winPoints ?? cfg.winPoints ?? 3,
+      drawPoints: r.drawPoints ?? cfg.drawPoints ?? 1,
+      lossPoints: r.lossPoints ?? cfg.lossPoints ?? 0
+    }, true);
+  }});
+  [
+    ["volei","Vôlei"], ["voleipraia","Vôlei de Praia"], ["futevolei","Futevôlei"], ["futebol","Futebol"], ["futsal","Futsal"]
+  ].forEach(([v,l])=>sportSel.appendChild(el("option", {value:v, selected:cfg.sport===v?"selected":null}, l)));
+  sportWrap.appendChild(sportSel);
+  row1.appendChild(sportWrap);
+  card.appendChild(row1);
+
+  const row2 = div("wiz-row");
+  const fmtWrap = div("");
+  fmtWrap.appendChild(el("label", {class:"lbl"}, "Formato"));
+  const fmtSel = el("select", {class:"inp", onChange:e=>{
+    const newFmt = e.target.value;
+    updateCfg({
+      fmt: newFmt,
+      groupCount: normalizeGroupCountForFormat(newFmt, cfg.groupCount),
+      qpg: normalizeQpgForFormat(newFmt, cfg.qpg)
+    }, true);
+  }});
+  [["sg","Grupo Único"],["mg","Múltiplos Grupos"],["se","Mata-Mata"],["sw","Sistema Suíço"]].forEach(([v,l])=>fmtSel.appendChild(el("option", {value:v, selected:cfg.fmt===v?"selected":null}, l)));
+  fmtWrap.appendChild(fmtSel);
+  row2.appendChild(fmtWrap);
+
+  const groupIsEditable = cfg.fmt === "mg";
+  const gcWrap = div("");
+  gcWrap.appendChild(el("label", {class:"lbl"}, "Número de grupos"));
+  gcWrap.appendChild(el("input", {
+    class:"inp",
+    type:"number",
+    min: groupIsEditable ? "2" : "1",
+    value: normalizeGroupCountForFormat(cfg.fmt, cfg.groupCount),
+    disabled: groupIsEditable ? null : "disabled",
+    onInput:e=>updateCfg({groupCount:e.target.value})
+  }));
+  if (!groupIsEditable) gcWrap.appendChild(el("div", {style:{fontSize:"10px",color:"var(--muted)",marginTop:"4px"}}, "Este formato usa 1 grupo lógico."));
+  row2.appendChild(gcWrap);
+
+  const qWrap = div("");
+  qWrap.appendChild(el("label", {class:"lbl"}, "Classificados por grupo"));
+  qWrap.appendChild(el("input", {
+    class:"inp",
+    type:"number",
+    min:"1",
+    value: cfg.fmt === "mg" ? normalizeQpgForFormat(cfg.fmt, cfg.qpg) : 0,
+    disabled: cfg.fmt === "mg" ? null : "disabled",
+    onInput:e=>updateCfg({qpg:e.target.value})
+  }));
+  if (cfg.fmt !== "mg") qWrap.appendChild(el("div", {style:{fontSize:"10px",color:"var(--muted)",marginTop:"4px"}}, "Não aplicável para este formato."));
+  row2.appendChild(qWrap);
+  card.appendChild(row2);
+
+  const ruleRow = div("wiz-row");
+  const setSport = cfg.sport === "volei" || cfg.sport === "voleipraia" || cfg.sport === "futevolei";
+  if (setSport) {
+    const s1 = div(""); s1.appendChild(el("label", {class:"lbl"}, "Sets para vencer"));
+    s1.appendChild(el("input", {class:"inp", type:"number", min:"1", value:cfg.setsToWin, onInput:e=>updateCfg({setsToWin:e.target.value})})); ruleRow.appendChild(s1);
+    const s2 = div(""); s2.appendChild(el("label", {class:"lbl"}, "Pontos por set"));
+    s2.appendChild(el("input", {class:"inp", type:"number", min:"1", value:cfg.pointsPerSet, onInput:e=>updateCfg({pointsPerSet:e.target.value})})); ruleRow.appendChild(s2);
+    const s3 = div(""); s3.appendChild(el("label", {class:"lbl"}, "Tie-break"));
+    s3.appendChild(el("input", {class:"inp", type:"number", min:"1", value:cfg.tieBreakPoints, onInput:e=>updateCfg({tieBreakPoints:e.target.value})})); ruleRow.appendChild(s3);
+  } else {
+    const p1 = div(""); p1.appendChild(el("label", {class:"lbl"}, "Pontos por vitória"));
+    p1.appendChild(el("input", {class:"inp", type:"number", value:cfg.winPoints, onInput:e=>updateCfg({winPoints:e.target.value})})); ruleRow.appendChild(p1);
+    const p2 = div(""); p2.appendChild(el("label", {class:"lbl"}, "Pontos por empate"));
+    p2.appendChild(el("input", {class:"inp", type:"number", value:cfg.drawPoints, onInput:e=>updateCfg({drawPoints:e.target.value})})); ruleRow.appendChild(p2);
+    const p3 = div(""); p3.appendChild(el("label", {class:"lbl"}, "Pontos por derrota"));
+    p3.appendChild(el("input", {class:"inp", type:"number", value:cfg.lossPoints, onInput:e=>updateCfg({lossPoints:e.target.value})})); ruleRow.appendChild(p3);
+  }
+  card.appendChild(ruleRow);
+
+  const third = el("div", {style:{margin:"8px 0 10px", padding:"8px 10px", background:"var(--s1)", border:"1px solid var(--border)", borderRadius:"7px"}});
+  const thirdDisabled = !(cfg.fmt === "mg" || cfg.fmt === "se");
+  const chk = el("input", {
+    type:"checkbox",
+    checked:cfg.includeThirdPlace && !thirdDisabled ? "checked" : null,
+    disabled:thirdDisabled ? "disabled" : null,
+    onChange:e=>updateCfg({includeThirdPlace:e.target.checked})
+  });
+  third.appendChild(chk);
+  third.appendChild(el("span", {style:{marginLeft:"8px", fontSize:"12px"}}, "Incluir disputa de 3º lugar"));
+  if (thirdDisabled) third.appendChild(el("div", {style:{fontSize:"10px",color:"var(--muted)",marginTop:"5px"}}, "Disponível apenas para formatos com fase eliminatória."));
+  card.appendChild(third);
+
+  card.appendChild(el("label", {class:"lbl"}, "Equipes / Duplas"));
+  card.appendChild(el("textarea", {class:"textarea", style:{minHeight:"70px"}, onInput:e=>updateCfg({teamsText:e.target.value})}, cfg.teamsText));
+
+  const fmtChanged = cfg.fmt !== t.fmt;
+  const structuralMsg = fmtChanged
+    ? "Formato alterado: para aplicar a mudança é necessário usar Recriar estrutura."
+    : "Salvar regras/ficha preserva jogos e placares. Recriar estrutura refaz grupos/jogos/chaveamento e reinicia placares.";
+  card.appendChild(el("div", {class:fmtChanged?"notice notice-info":"notice notice-info", style:{marginTop:"10px"}}, structuralMsg));
+
+  card.appendChild(el("div", {style:{marginTop:"10px", display:"flex", gap:"8px", flexWrap:"wrap"}},
+    btn("btn-primary btn-sm", "Salvar regras/ficha", ()=>{
+      const sport = cfg.sport;
+      const setSport = sport === "volei" || sport === "voleipraia" || sport === "futevolei";
+      const base = defaultRulesForSport(sport);
+      const normalizedFmt = t.fmt; // salvar regras não altera estrutura/formato
+      const rules = {
+        ...base,
+        ...(t.rules || {}),
+        sport,
+        format: normalizedFmt,
+        teamCount: getTournamentTeamCount(t),
+        groupCount: normalizeGroupCountForFormat(normalizedFmt, getTournamentGroupCount(t)),
+        qualifiersPerGroup: normalizedFmt === "mg" ? Number(cfg.qpg || t.qpg || 2) : 0,
+        includeThirdPlace: (normalizedFmt === "mg" || normalizedFmt === "se") ? cfg.includeThirdPlace !== false : false
+      };
+      if (setSport) {
+        rules.matchMode = "sets";
+        rules.setsToWin = Number(cfg.setsToWin || 2);
+        rules.pointsPerSet = Number(cfg.pointsPerSet || 25);
+        rules.tieBreakPoints = Number(cfg.tieBreakPoints || 15);
+        delete rules.winPoints; delete rules.drawPoints; delete rules.lossPoints;
+      } else {
+        rules.matchMode = "score";
+        rules.winPoints = Number(cfg.winPoints ?? 3);
+        rules.drawPoints = Number(cfg.drawPoints ?? 1);
+        rules.lossPoints = Number(cfg.lossPoints ?? 0);
+        delete rules.setsToWin; delete rules.pointsPerSet; delete rules.tieBreakPoints;
+      }
+      const updated = {
+        ...t,
+        title: (cfg.title || t.title || "Torneio").trim(),
+        qpg: normalizedFmt === "mg" ? Number(cfg.qpg || t.qpg || 2) : 0,
+        rules,
+        tp: rules.includeThirdPlace === false ? null : (t.tp || {sA:null,sB:null})
+      };
+      persistTournamentWithDerived(updated, "Regras/ficha editadas pelo Admin");
+      STATE.adminEditDraft = null;
+      STATE.adminEditDraftTournamentId = null;
+    }),
+    btn("btn-danger btn-sm", fmtChanged ? "Aplicar novo formato / recriar estrutura" : "Recriar estrutura", ()=>{
+      const msg = fmtChanged
+        ? "Alterar formato exige recriar estrutura. Isso reinicia jogos, placares, grupos e chaveamento deste torneio. Continuar?"
+        : "Recriar a estrutura vai reiniciar jogos, placares e chaveamento deste torneio. Continuar?";
+      if(confirm(msg)){
+        const rebuilt = buildEditedTournamentFromForm(t, {
+          ...cfg,
+          groupCount: normalizeGroupCountForFormat(cfg.fmt, cfg.groupCount),
+          qpg: normalizeQpgForFormat(cfg.fmt, cfg.qpg),
+          includeThirdPlace: (cfg.fmt === "mg" || cfg.fmt === "se") ? cfg.includeThirdPlace !== false : false
+        });
+        persistTournament(rebuilt);
+        STATE.adminEditDraft = null;
+        STATE.adminEditDraftTournamentId = null;
+      }
+    })
+  ));
+
+  return card;
+}
+
 function renderAdminManage(t) {
   const wrap = div("");
   const hdr = el("div",{"style":{"display":"flex","justifyContent":"space-between","alignItems":"center","marginBottom":"12px"}});
@@ -2066,6 +2370,7 @@ function renderAdminManage(t) {
   wrap.appendChild(hdr);
 
   wrap.appendChild(renderTournamentInfoCard(t, true));
+  wrap.appendChild(renderAdminTournamentEditCard(t));
 
   const notesCard = div("card");
   notesCard.appendChild(renderCardHead("Informações adicionais"));
@@ -2578,41 +2883,66 @@ function renderMultiGroup(t, readOnly) {
       n.appendChild(btn("btn-primary btn-sm","Gerar Chaveamento",()=>persistTournament({...t,brk:buildBracket(qualified,t.rules?.bracketRules||{})})));
       ec.appendChild(n);
     }
-    if(t.brk) ec.appendChild(renderBracket(t.brk,readOnly,t,(rounds)=>persistTournament({...t,brk:rounds})));
+    if(t.brk) { ec.appendChild(renderBracket(t.brk,readOnly,t,(rounds)=>persistTournament({...t,brk:rounds}))); const thirdBlock = renderThirdPlaceBlock(t, readOnly); if (thirdBlock) ec.appendChild(thirdBlock); }
     wrap.appendChild(ec);
   }
   return wrap;
 }
 
-// ──────────────────────────────────────────────────────────
-//  SINGLE ELIM
-// ──────────────────────────────────────────────────────────
-function renderSingleElim(t, readOnly) {
-  const wrap = div("");
-  const n = div("notice notice-info");
-  n.innerHTML=`<span>🔱</span> ${t.teams.length} equipes · ${t.brk?.length} rodadas`;
-  wrap.appendChild(n);
-  if(t.brk) wrap.appendChild(renderBracket(t.brk,readOnly,t,(r)=>persistTournament({...t,brk:r})));
 
-  const semiRound = t.brk?.[t.brk.length-2];
-  const finalRound = t.brk?.[t.brk.length-1];
+function renderThirdPlaceBlock(t, readOnly) {
+  if (!t?.brk || t.rules?.includeThirdPlace === false) return null;
+
+  const semiRound = t.brk?.[t.brk.length - 2];
+  if (!semiRound || !Array.isArray(semiRound.games) || semiRound.games.length < 2) return null;
+
+  const semiLabels = semiRound.games.slice(0, 2).map((g, idx) => {
+    const w = winner(g.sA, g.sB, g.a, g.b);
+    if (!w) return `Perdedor ${semiRound.name || "Semifinal"} ${idx + 1}`;
+    return w === g.a ? g.b : g.a;
+  });
+
+  const semiResolved = semiRound.games.slice(0, 2).every(g => !!winner(g.sA, g.sB, g.a, g.b));
+
+  const finalRound = t.brk?.[t.brk.length - 1];
   const finalG = finalRound?.games?.[0];
-  const fw = winner(finalG?.sA,finalG?.sB,finalG?.a,finalG?.b);
-  const fl = fw?(fw===finalG?.a?finalG?.b:finalG?.a):null;
-  const semiLosers = semiRound?.games?.map(g=>{ const w=winner(g.sA,g.sB,g.a,g.b); return w?(w===g.a?g.b:g.a):null; }).filter(Boolean)||[];
+  const finalWinner = winner(finalG?.sA, finalG?.sB, finalG?.a, finalG?.b);
+  const finalLoser = finalWinner ? (finalWinner === finalG?.a ? finalG?.b : finalG?.a) : null;
 
-  if(semiLosers.length===2){
-    const tc = div("card");
-    tc.appendChild(renderCardHead("3º Lugar"));
-    const tp = t.tp||{sA:null,sB:null};
-    tc.appendChild(renderElimSlot("3º Lugar",semiLosers[0],semiLosers[1],tp.sA,tp.sB,"elim-third",readOnly,t,"tp",(f,v)=>{
-      persistTournament({...t,tp:{...tp,...scorePatch(f,v)}});
-    }));
-    const tw = winner(tp.sA,tp.sB,semiLosers[0],semiLosers[1]);
-    if(fw||tw) tc.appendChild(renderPodium(fw,fl,tw));
-    wrap.appendChild(tc);
+  const tc = div("card");
+  tc.appendChild(renderCardHead("3º Lugar"));
+
+  const tp = t.tp || { sA: null, sB: null };
+  tc.appendChild(renderElimSlot(
+    "3º Lugar",
+    semiLabels[0],
+    semiLabels[1],
+    tp.sA,
+    tp.sB,
+    "elim-third",
+    readOnly || !semiResolved,
+    t,
+    "tp",
+    (f, v) => {
+      persistTournament({
+        ...t,
+        tp: { ...tp, ...scorePatch(f, v) }
+      });
+    }
+  ));
+
+  if (!semiResolved) {
+    tc.appendChild(el("div", {style:{fontSize:"10px",color:"var(--muted)",marginTop:"6px"}},
+      "A disputa de 3º lugar está prevista. As equipes serão preenchidas após as semifinais."
+    ));
   }
-  return wrap;
+
+  const thirdWinner = semiResolved ? winner(tp.sA, tp.sB, semiLabels[0], semiLabels[1]) : null;
+  if (finalWinner || thirdWinner) {
+    tc.appendChild(renderPodium(finalWinner, finalLoser, thirdWinner));
+  }
+
+  return tc;
 }
 
 // ──────────────────────────────────────────────────────────
@@ -2843,16 +3173,31 @@ function renderElimSlot(label, a, b, sA, sB, cls, readOnly, t, key, onScore) {
 function renderBracket(rounds, readOnly, t, onUpdate) {
   const wrap = div("");
   rounds.forEach((rnd,ri)=>{
-    wrap.appendChild(el("div",{"class":"brk-round-title"},rnd.name));
+    const titleRow = el("div", {style:{display:"flex", alignItems:"center", gap:"8px", margin:"14px 0 8px", flexWrap:"wrap"}});
+    if (!readOnly) {
+      const nameInp = el("input", {class:"inp", value:rnd.name || rndName(Math.pow(2, Math.max(0, rounds.length-ri-1))), style:{maxWidth:"240px"}, onChange:e=>{
+        const r = JSON.parse(JSON.stringify(rounds));
+        r[ri].name = e.target.value.trim() || r[ri].name;
+        onUpdate(r);
+      }});
+      titleRow.appendChild(nameInp);
+      titleRow.appendChild(el("span", {style:{fontSize:"10px", color:"var(--muted)"}}, "Nome da fase"));
+    } else {
+      titleRow.appendChild(el("div",{"class":"brk-round-title", style:{margin:"0"}},rnd.name));
+    }
+    wrap.appendChild(titleRow);
+
     rnd.games.forEach((g,gi)=>{
       const key=`${t.fmt==="se"?"se":"br"}-${rnd.rn}-${gi}`;
-      const slot = renderElimSlot(`J${gi+1}`,g.a,g.b,g.sA,g.sB,rnd.name==="Final 🏆"?"elim-final":rnd.name==="Semifinal"?"elim-semi":"",readOnly,t,key,(field,val)=>{
+      const isBye = !!g.byeWinner || (g.a && !g.b) || (!g.a && g.b);
+      const slot = renderElimSlot(isBye ? "BYE" : `J${gi+1}`,g.a,g.b,g.sA,g.sB,rnd.name==="Final 🏆"?"elim-final":rnd.name==="Semifinal"?"elim-semi":"",readOnly || isBye,t,key,(field,val)=>{
         const r=JSON.parse(JSON.stringify(rounds));
         Object.assign(r[ri].games[gi], scorePatch(field,val));
         onUpdate(propagateBracket(r));
       });
-      if (g.byeWinner) {
-        slot.appendChild(el("div",{"style":{fontSize:"10px",color:"var(--blue)",marginTop:"5px"}},`Bye automático: ${g.byeWinner}`));
+      if (isBye) {
+        const byeTeam = g.byeWinner || g.a || g.b;
+        slot.appendChild(el("div",{"style":{fontSize:"10px",color:"var(--blue)",marginTop:"5px"}},`BYE automático: ${safeText(byeTeam)} avança sem placar`));
       }
       if (g.aGroup || g.bGroup) {
         slot.appendChild(el("div",{"style":{fontSize:"9px",color:"var(--muted)",marginTop:"3px"}},`Seeds: ${safeText(g.aSeed)}${g.aGroup?`/${g.aGroup}`:""} × ${safeText(g.bSeed)}${g.bGroup?`/${g.bGroup}`:""}`));
